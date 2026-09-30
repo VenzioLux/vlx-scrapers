@@ -11,9 +11,9 @@ Features:
 - Zero dependency, Node >= 18
 
 Usage:
-  node yt-vr-lite.mjs <url>            metadata JSON
-  node yt-vr-lite.mjs <url> mp3        audio
-  node yt-vr-lite.mjs <url> mp4 [res]  video (default 720p)
+  node ytVr-lite.mjs <url>            metadata JSON
+  node ytVr-lite.mjs <url> mp3        audio
+  node ytVr-lite.mjs <url> mp4 [res]  video (default 720p)
 */
 
 import { spawn } from 'node:child_process'
@@ -332,7 +332,7 @@ export async function videoBuffer(input, targetRes = 720, { timeout = 240000 } =
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
     const [, , target, mode = 'info', opt] = process.argv
     if (!target) {
-        console.log('pakai: node yt-vr-lite.mjs <url|videoId> [info|mp3|mp4] [opt]')
+        console.log('pakai: node ytVr-lite.mjs <url|videoId> [info|mp3|mp4] [opt]')
         process.exit(1)
     }
     if (mode === 'mp3') {

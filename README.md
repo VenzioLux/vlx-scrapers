@@ -43,7 +43,7 @@ langsung sebelum masuk sini. Bukan kumpulan copas, bukan wrapper doang.
 scrapers/
 └── downloader/
     └── yt/
-        └── yt-vr-lite.mjs     # YouTube extractor & downloader no-PoToken
+        └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
 ```
 
 Kategori folder mengikuti fungsi, bukan bahasa atau target:
@@ -55,18 +55,18 @@ Kategori folder mengikuti fungsi, bukan bahasa atau target:
 
 ## Cara pake
 
-Tiap scraper punya mode CLI sendiri — contoh dari `yt-vr-lite.mjs`:
+Tiap scraper punya mode CLI sendiri — contoh dari `ytVr-lite.mjs`:
 
 ```console
-$ node yt-vr-lite.mjs <url>            # metadata JSON
-$ node yt-vr-lite.mjs <url> mp3        # audio
-$ node yt-vr-lite.mjs <url> mp4 [res]  # video (default 720p)
+$ node ytVr-lite.mjs <url>            # metadata JSON
+$ node ytVr-lite.mjs <url> mp3        # audio
+$ node ytVr-lite.mjs <url> mp4 [res]  # video (default 720p)
 ```
 
 Atau dari kode:
 
 ```js
-import { extract, audioBuffer } from './downloader/yt/yt-vr-lite.mjs'
+import { extract, audioBuffer } from './downloader/yt/ytVr-lite.mjs'
 
 const info = await extract('https://youtu.be/xxxx')
 const { buffer, title, ext } = await audioBuffer('https://youtu.be/xxxx')
