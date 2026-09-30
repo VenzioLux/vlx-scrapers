@@ -148,8 +148,8 @@ export async function extract(input, { fresh = false } = {}) {
         if (!f.url) continue
         const { container, codec } = _parseMime(f.mimeType)
         const base = { itag: f.itag, mimeType: f.mimeType, container, codec, bitrate: f.bitrate || 0, contentLength: Number(f.contentLength || 0), url: f.url }
-        if (container.startsWith('audio/')) audio.push({ ...base, audioQuality: f.audioQuality || '' })
-        else if (container.startsWith('video/')) video.push({ ...base, quality: f.qualityLabel || '', width: f.width || 0, height: f.height || 0, fps: f.fps || 0, hasAudio: !!f.audioQuality || f.itag === 18 || f.itag === 22 })
+        if (container.startsWith('audio/')) audio.push({ ...base, audioQuality: f.audioQuality || '', audioQualityKbps: _fmtAud(f.audioQuality, f.bitrate) })
+        else if (container.startsWith('video/')) video.push({ ...base, quality: f.qualityLabel || '', qualityLabel: _fmtVid(f.height, f.fps), width: f.width || 0, height: f.height || 0, fps: f.fps || 0, hasAudio: !!f.audioQuality || f.itag === 18 || f.itag === 22 })
     }
     audio.sort((a, b) => b.bitrate - a.bitrate)
     video.sort((a, b) => (b.height || 0) - (a.height || 0))
@@ -301,6 +301,21 @@ function embedMeta(buf, { title = '', artist = '', comment = '', ext = 'm4a' }) 
     }
 }
 
+// "AUDIO_QUALITY_MEDIUM" + bitrate 130677 -> "131kbps (medium)" — enum mentah YouTube
+// gak enak dibaca, jadi diformat numerik; bitrate = sumber kebenaran utama.
+function _fmtAud(audioQuality, bitrate) {
+    const kbps = bitrate ? Math.round(bitrate / 1000) + 'kbps' : ''
+    const map = { AUDIO_QUALITY_LOW: 'low', AUDIO_QUALITY_MEDIUM: 'medium', AUDIO_QUALITY_HIGH: 'high' }
+    const q = map[audioQuality] || ''
+    return kbps && q ? `${kbps} (${q})` : (kbps || q || 'unknown')
+}
+
+// height 720 + fps 30 -> "720p" ; 1080 + 60 -> "1080p60"
+function _fmtVid(height, fps) {
+    if (!height) return ''
+    return fps >= 50 ? `${height}p${fps}` : `${height}p`
+}
+
 export async function audioBuffer(input, { timeout = 120000, meta = true } = {}) {
     const ex = await extract(input)
     const pick = pickAudio(ex)
@@ -314,7 +329,7 @@ export async function audioBuffer(input, { timeout = 120000, meta = true } = {})
         durationSeconds: ex.durationSeconds, viewCount: ex.viewCount, isLive: ex.isLive,
         thumbnail: ex.thumbnail, engine: ex.engine,
         ext: m4a ? 'm4a' : 'webm', mimetype: m4a ? 'audio/mp4' : 'audio/webm',
-        stream: { itag: pick.itag, container: pick.container, codec: pick.codec, bitrate: pick.bitrate, audioQuality: pick.audioQuality || '' },
+        stream: { itag: pick.itag, container: pick.container, codec: pick.codec, bitrate: pick.bitrate, quality: pick.quality || _fmtVid(pick.height, pick.fps), audioQuality: pick.audioQuality || '', audioQualityKbps: pick.audioQualityKbps || _fmtAud(pick.audioQuality, pick.bitrate) },
     }
 }
 
