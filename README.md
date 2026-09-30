@@ -1,27 +1,36 @@
 # scrapers
 
-Kumpulan scraper standalone. Satu file = satu mesin yang jalan sendiri:
-tanpa framework, tanpa dependency eksternal (cuma Node bawaan, >= 18).
+Kumpulan scraper standalone. One file, one machine:
+no framework, no `npm install` — cukup Node ≥ 18 dan langsung jalan.
 Bisa dieksekusi langsung lewat CLI, atau di-import ke project apapun —
 bot WhatsApp, API, CLI tools, tinggal tempel.
 
-Repo ini isinya hasil reverse-engineering & rekayasa sendiri yang diuji
-langsung sebelum masuk sini. Bukan kumpulan copas, bukan wrapper doang.
+Repo ini isinya hasil reverse-engineering & rekayasa sendiri — tested
+before it lands here. Bukan kumpulan copas, bukan wrapper doang.
 
 ---
 
-## Kenapa standalone & zero dependency?
+## Why standalone & no `npm install`?
 
-- **Gak ada `npm install`** — ambil satu file, jalan. Gak ada riwayat dependency
+- **Ambil satu file, jalan** — gak ada langkah install, gak ada riwayat dependency
   yang bisa mati diam-diam pas maintainernya berhenti.
 - **Mudah diaudit** — semua logic kebaca dari satu file, gak ada yang
   ke-dll-in dari node_modules.
 - **Gampang ditempel** — mau dipake di bot, server, laptop, termux, tinggal
   copy satu file.
 
+> Catatan: beberapa scraper punya fitur opsional yang memanfaatkan tool sistem
+> (mis. `ffmpeg` buat nempel-in metadata audio). Kalau tool-nya gak ada, fitur
+> itu di-skip otomatis dan scraper tetep jalan penuh. Satu-satunya syarat
+> yang wajib cuma Node ≥ 18.
+>
+> Jadi janji "no npm install" itu: file-nya jalan cukup dengan Node — nothing
+> more. Bukan janji tiap scraper bakal 100% bebas tool eksternal selamanya,
+> tapi bahwa apapun di luar Node sifatnya opsional dan skip-nya graceful.
+
 ---
 
-## Prinsip yang dipegang semua scraper di sini
+## Principles
 
 1. **Diuji dulu, masuk kemudian.** Yang gagal atau setengah jalan gak akan
    pernah nongol di repo ini.
@@ -37,7 +46,7 @@ langsung sebelum masuk sini. Bukan kumpulan copas, bukan wrapper doang.
 
 ---
 
-## Struktur
+## Structure
 
 ```
 scrapers/
@@ -46,16 +55,16 @@ scrapers/
         └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
 ```
 
-Kategori folder mengikuti fungsi, bukan bahasa atau target:
+Categories follow function, not language or target:
 
-- `downloader/` — ngambil media (audio/video/gambar)
+- `downloader/` — media grabbers (audio/video/gambar)
 - kategori lain mengikuti kalau ada scraper baru
 
 ---
 
-## Cara pake
+## Usage
 
-Tiap scraper punya mode CLI sendiri — contoh dari `ytVr-lite.mjs`:
+Every scraper ships with its own CLI modes — contoh dari `ytVr-lite.mjs`:
 
 ```console
 $ node ytVr-lite.mjs <url>            # metadata JSON
@@ -76,27 +85,27 @@ Detail opsi tiap scraper selalu ada di header file-nya masing-masing.
 
 ---
 
-## Legalitas & etika
+## Legal & ethics
 
 - Scraper di sini cuma **ngambil konten yang secara teknis bisa diakses
   publik** — gak ada bypass DRM, gak ada akun/password, gak ada konten privat.
 - File hasil unduhan adalah tanggung jawab si pemake. Hormati hak cipta
   konten kreator.
-- Kalau layanan yang di-scrape minta berhenti, ya kita berhenti.
+- Kalau layanan yang di-scrape minta berhenti, ya kita berhenti. Simple as that.
 
 ---
 
-## Kredit & watermarked
+## Credits & watermark
 
 © **VenzioLûx** — **Vloûte Cataclysm**
 
-Dibuat dan diuji langsung dari VPS pribadi. Teknik client Innertube app
+Built and tested on a private VPS. Teknik client Innertube app
 pada scraper YouTube merujuk ke [yt-dlp](https://github.com/yt-dlp/yt-dlp) dan paste
 extractor ANDROID_VR yang udah beredar di komunitas — sisanya (downloader
 budget-aware, anti-trickle paralel, multi-client fallback chain, auto-mux)
 hasil rekayasa dan pengujian sendiri.
 
-## Lisensi & pemakaian
+## License & terms
 
 - **Bebas dipake** buat proyek apapun — pribadi, grup, komersial sekalipun,
   gak perlu izin dulu.
@@ -115,5 +124,5 @@ jejaknya gak hilang.
 
 ---
 
-> © 2026 VenzioLûx — Vloûte Cataclysm. Dibuat dengan riset, kopi, dan
-> beberapa ratus request yang gagal sebelum berhasil.
+> © 2026 VenzioLûx — Vloûte Cataclysm. Made with research, coffee, and a
+> few hundred failed requests before the first success.
