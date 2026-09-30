@@ -16,7 +16,7 @@ Usage:
   node ytVr-lite.mjs <url> mp4 [res]  video (default 720p)
 */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -280,24 +280,57 @@ export async function downloadStream(url, { totalSize = 0, refresh = null, timeo
 
 const _dur = (s) => { s = Number(s || 0); const m = Math.floor(s / 60), d = Math.floor(s % 60); return `${m}:${String(d).padStart(2, '0')}` }
 
-export async function audioBuffer(input, { timeout = 120000 } = {}) {
+// embed metadata (title/artist/source) ke file — ffmpeg -c copy, gak re-encode.
+// ffmpeg gak ada? skip aja, file tetep valid cuma tanpa tag.
+const _hasFF = (() => { try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0 } catch { return false } })()
+function embedMeta(buf, { title = '', artist = '', comment = '', ext = 'm4a' }) {
+    if (!_hasFF || !buf?.length) return buf
+    const tmp = path.join(os.tmpdir(), `meta-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const inF = `${tmp}-in.${ext}`, outF = `${tmp}-out.${ext}`
+    try {
+        fs.writeFileSync(inF, buf)
+        const r = spawnSync('ffmpeg', ['-y', '-i', inF, '-map', '0', '-c', 'copy',
+            '-metadata', `title=${title}`, '-metadata', `artist=${artist}`,
+            '-metadata', `comment=${comment}`, '-movflags', '+faststart', outF],
+            { stdio: ['ignore', 'ignore', 'ignore'], timeout: 60000 })
+        if (r.status !== 0 || !fs.existsSync(outF)) return buf
+        const out = fs.readFileSync(outF)
+        return out.length > 1000 ? out : buf
+    } catch { return buf } finally {
+        for (const f of [inF, outF]) { try { fs.unlinkSync(f) } catch { } }
+    }
+}
+
+export async function audioBuffer(input, { timeout = 120000, meta = true } = {}) {
     const ex = await extract(input)
     const pick = pickAudio(ex)
     if (!pick?.url) throw new Error('stream audio gak tersedia')
-    const buffer = await downloadStream(pick.url, { totalSize: pick.contentLength, refresh: () => streamUrl(input, pick.itag), timeout })
+    let buffer = await downloadStream(pick.url, { totalSize: pick.contentLength, refresh: () => streamUrl(input, pick.itag), timeout })
     const m4a = pick.container === 'audio/mp4'
-    return { buffer, title: ex.title, ext: m4a ? 'm4a' : 'webm', mimetype: m4a ? 'audio/mp4' : 'audio/webm', duration: _dur(ex.durationSeconds), thumbnail: ex.thumbnail, engine: ex.engine }
+    if (meta) buffer = embedMeta(buffer, { title: ex.title, artist: ex.author, comment: `https://youtu.be/${ex.videoId}`, ext: m4a ? 'm4a' : 'webm' })
+    return {
+        buffer, title: ex.title, author: ex.author, videoId: ex.videoId,
+        description: ex.description, duration: _dur(ex.durationSeconds),
+        durationSeconds: ex.durationSeconds, viewCount: ex.viewCount, isLive: ex.isLive,
+        thumbnail: ex.thumbnail, engine: ex.engine,
+        ext: m4a ? 'm4a' : 'webm', mimetype: m4a ? 'audio/mp4' : 'audio/webm',
+        stream: { itag: pick.itag, container: pick.container, codec: pick.codec, bitrate: pick.bitrate, audioQuality: pick.audioQuality || '' },
+    }
 }
 
 // mux video+audio (adaptive)
-function mux(vBuf, aBuf) {
+function mux(vBuf, aBuf, meta = {}) {
     return new Promise((resolve, reject) => {
         const tmp = path.join(os.tmpdir(), `ytvr-${Date.now()}-${Math.random().toString(36).slice(2)}`)
         const vf = tmp + '.m4v', af = tmp + '.m4a', of = tmp + '.mp4'
         fs.writeFileSync(vf, vBuf); if (aBuf) fs.writeFileSync(af, aBuf)
+        const tags = [
+            '-metadata', `title=${meta.title || ''}`, '-metadata', `artist=${meta.artist || ''}`,
+            '-metadata', `comment=${meta.comment || ''}`,
+        ]
         const args = aBuf
-            ? ['-y', '-i', vf, '-i', af, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-movflags', '+faststart', of]
-            : ['-y', '-i', vf, '-c', 'copy', '-movflags', '+faststart', of]
+            ? ['-y', '-i', vf, '-i', af, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', '-shortest', ...tags, '-movflags', '+faststart', of]
+            : ['-y', '-i', vf, '-c', 'copy', ...tags, '-movflags', '+faststart', of]
         const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
         let err = ''
         ff.stderr.on('data', d => { err = (err + d).slice(-4000) })
@@ -318,16 +351,32 @@ export async function videoBuffer(input, targetRes = 720, { timeout = 240000 } =
     const ex = await extract(input)
     const v = pickVideo(ex, targetRes)
     if (!v?.url) throw new Error('stream video gak tersedia')
+    const meta = { title: ex.title, artist: ex.author, comment: `https://youtu.be/${ex.videoId}` }
     if (v.hasAudio) {
-        const buffer = await downloadStream(v.url, { totalSize: v.contentLength, refresh: () => streamUrl(input, v.itag), timeout: timeout / 2 })
-        return { buffer, title: ex.title, height: v.height, ext: 'mp4', mimetype: 'video/mp4', engine: ex.engine }
+        let buffer = await downloadStream(v.url, { totalSize: v.contentLength, refresh: () => streamUrl(input, v.itag), timeout: timeout / 2 })
+        buffer = embedMeta(buffer, { ...meta, ext: 'mp4' })
+        return {
+            buffer, title: ex.title, author: ex.author, videoId: ex.videoId,
+            description: ex.description, duration: _dur(ex.durationSeconds),
+            durationSeconds: ex.durationSeconds, viewCount: ex.viewCount, isLive: ex.isLive,
+            thumbnail: ex.thumbnail, engine: ex.engine,
+            height: v.height, ext: 'mp4', mimetype: 'video/mp4',
+            stream: { itag: v.itag, container: v.container, codec: v.codec, fps: v.fps },
+        }
     }
     const a = (ex.audio || []).find(s => s.container === 'audio/mp4') || pickAudio(ex)
     const [vBuf, aBuf] = await Promise.all([
         downloadStream(v.url, { totalSize: v.contentLength, refresh: () => streamUrl(input, v.itag), timeout: timeout / 2 }),
         a ? downloadStream(a.url, { totalSize: a.contentLength, refresh: () => streamUrl(input, a.itag), timeout: timeout / 2 }) : Promise.resolve(null),
     ])
-    return { buffer: await mux(vBuf, aBuf), title: ex.title, height: v.height, ext: 'mp4', mimetype: 'video/mp4', engine: ex.engine }
+    return {
+        buffer: await mux(vBuf, aBuf, meta), title: ex.title, author: ex.author, videoId: ex.videoId,
+        description: ex.description, duration: _dur(ex.durationSeconds),
+        durationSeconds: ex.durationSeconds, viewCount: ex.viewCount, isLive: ex.isLive,
+        thumbnail: ex.thumbnail, engine: ex.engine,
+        height: v.height, ext: 'mp4', mimetype: 'video/mp4',
+        stream: { itag: v.itag, container: v.container, codec: v.codec, fps: v.fps, audioItag: a?.itag || null },
+    }
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
@@ -336,13 +385,28 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
         console.log('pakai: node ytVr-lite.mjs <url|videoId> [info|mp3|mp4] [opt]')
         process.exit(1)
     }
+    // dump hasil (minus buffer) sebagai JSON lengkap — metadata, desc, stream, dll
+    const _dump = (r, f, dt) => console.log(JSON.stringify({
+        status: 'success',
+        title: r.title, author: r.author,
+        videoId: r.videoId, url: `https://youtu.be/${r.videoId}`,
+        duration: r.duration, durationSeconds: r.durationSeconds,
+        viewCount: r.viewCount, isLive: r.isLive,
+        description: r.description,
+        thumbnail: r.thumbnail, engine: r.engine,
+        stream: r.stream,
+        file: f, ext: r.ext, mimetype: r.mimetype,
+        size: { bytes: r.buffer.length, mb: +(r.buffer.length / 1048576).toFixed(2) },
+        metadataEmbedded: true, timeSec: +dt,
+    }, null, 2))
+
     if (mode === 'mp3') {
         const t0 = Date.now()
         try {
             const r = await audioBuffer(target)
             const f = opt || `${r.title.replace(/[<>:"/\\|?*]/g, '_')}.${r.ext}`
             fs.writeFileSync(f, r.buffer)
-            console.log(`OK ${f} — ${(r.buffer.length / 1048576).toFixed(2)}MB (${r.duration}) [${r.engine}] dalam ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+            _dump(r, f, (Date.now() - t0) / 1000)
         } catch (e) {
             console.error('GAGAL:', e.message)
             process.exit(1)
@@ -353,7 +417,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             const r = await videoBuffer(target, Number(opt) || 720)
             const f = `${r.title.replace(/[<>:"/\\|?*]/g, '_')}_${r.height}p.mp4`
             fs.writeFileSync(f, r.buffer)
-            console.log(`OK ${f} — ${(r.buffer.length / 1048576).toFixed(2)}MB [${r.engine}] dalam ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+            _dump(r, f, (Date.now() - t0) / 1000)
         } catch (e) {
             console.error('GAGAL:', e.message)
             process.exit(1)
