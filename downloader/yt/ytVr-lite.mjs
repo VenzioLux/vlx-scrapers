@@ -186,6 +186,7 @@ async function streamUrl(input, itag) {
 }
 
 // downloader budget-aware
+const _BIG = 4 * 1048576, _SMALL = 131072, _BUDGET = 1048576
 export async function downloadStream(url, { totalSize = 0, refresh = null, timeout = 120000 } = {}) {
     const deadline = Date.now() + Math.max(20000, timeout)
     const left = () => deadline - Date.now()
