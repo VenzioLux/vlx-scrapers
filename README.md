@@ -51,8 +51,10 @@ before it lands here. Bukan kumpulan copas, bukan wrapper doang.
 ```
 scrapers/
 └── downloader/
-    └── yt/
-        └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
+    ├── yt/
+    │   └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
+    └── tiktok/
+        └── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
 ```
 
 Categories follow function, not language or target:
