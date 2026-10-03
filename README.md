@@ -54,7 +54,8 @@ scrapers/
     ├── yt/
     │   └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
     └── tiktok/
-        └── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
+        ├── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
+        └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
 ```
 
 Categories follow function, not language or target:
@@ -84,6 +85,22 @@ const { buffer, title, ext } = await audioBuffer('https://youtu.be/xxxx')
 ```
 
 Detail opsi tiap scraper selalu ada di header file-nya masing-masing.
+
+TikTok punya dua mesin, karena dua alasan teknis yang beda:
+
+- **`tikMw.mjs`** — ngambil langsung dari TikTok. Video no-watermark, audio,
+  foto carousel, slideshow. Tapi endpoint search TikTok memblokir IP datacenter,
+  jadi mode search gak ada di sini.
+- **`tikAlt.mjs`** — lewat resolver TikWM, jadi **search keyword** dan
+  **LivePhoto motion** bisa jalan dari mana aja, termasuk IP datacenter.
+
+```console
+$ node tikMw.mjs  <url> mp4                  # video no-watermark
+$ node tikMw.mjs  <url> slide                # foto carousel -> 1 MP4
+$ node tikAlt.mjs search "joki derag" 20     # cari video
+$ node tikAlt.mjs <url> live  out.mp4        # motion LivePhoto
+$ node tikAlt.mjs <url> slide out.mp4        # foto + motion -> 1 MP4
+```
 
 ---
 
