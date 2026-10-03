@@ -88,7 +88,7 @@ export async function search(keyword, { count = 20, watermark = false } = {}) {
             if (out.length >= count) break
         }
         cursor += 30
-        await sleep(900) // jangan bombardir resolver
+        await sleep(900)
     }
     if (!out.length) throw new Error(`keyword "${q}" gak ada hasilnya di TikTok.`)
     return { keyword: q, count: out.length, source: 'tiktok (via tikwm)', items: out }
@@ -131,7 +131,6 @@ export async function resolveTarget(raw) {
     if (/^\d{15,20}$/.test(s)) s = `https://www.tiktok.com/@i/video/${s}`
     else if (!/^https?:\/\//i.test(s)) {
         if (/^((www|m|vt|vm|v)\.)?tiktok\.com(\/|$)/i.test(s)) s = 'https://' + s
-        else if (/^https?:\/\/(vt|vm)\.tiktok\.com/i.test(s)) { /* biarkan, resolver yg follow redirect */ }
         else return null
     }
     return s
@@ -144,7 +143,6 @@ export async function info(input) {
     if (_cache.has(key) && Date.now() - _cache.get(key).at < _TTL) return _cache.get(key).data
     const d = await _api('/api/', { url, hd: 1 })
     const v = Array.isArray(d) ? d[0] : d
-    // /api/ pake key "id", sedangkan /api/feed/search/ pake "video_id"
     const id = v?.video_id || v?.id
     if (!id) throw new Error('post ini gak ketemu di TikTok. Cek link-nya, atau kalo post-nya private/deleted ya memang gak bisa.')
     const ex = _norm(id, v, false)
@@ -156,7 +154,7 @@ export async function info(input) {
     return ex
 }
 
-//download (CDN TikWM: bisa tanpa signature & tanpa User-Agent)
+//download (CDN TikWM tanpa signature & tanpa User-Agent)
 const _CHUNK = 6 * 1024 * 1024
 
 async function _get(url, start, end, tries = 4) {
@@ -179,10 +177,9 @@ async function _get(url, start, end, tries = 4) {
 
 export async function downloadStream(urlIn, { timeout = 240000 } = {}) {
     if (!urlIn) throw new Error('URL file kosong.')
-    const probe = await _get(urlIn, 0, 0) // 1 byte buat tau total size
+    const probe = await _get(urlIn, 0, 0)
     const total = probe.total
-    if (!total || total <= _CHUNK * 2) return (await _get(urlIn, null, null)).buf // file kecil: 1 kali jalan
-    // file besar: potong jadi beberapa range paralel
+    if (!total || total <= _CHUNK * 2) return (await _get(urlIn, null, null)).buf
     const n = Math.min(8, Math.ceil(total / _CHUNK))
     const parts = await Promise.allSettled(
         Array.from({ length: n }, (_, i) => {
@@ -194,7 +191,7 @@ export async function downloadStream(urlIn, { timeout = 240000 } = {}) {
     if (got.length === n && got.reduce((a, p) => a + p.buf.length, 0) === total) {
         return Buffer.concat(got.map(p => p.buf))
     }
-    return (await _get(urlIn, null, null)).buf // range dicampur -> fallback utuh
+    return (await _get(urlIn, null, null)).buf
 }
 
 // buffers
@@ -213,7 +210,7 @@ export async function audioBuffer(input, { mp3 = true } = {}) {
     let buffer = (await _get(url, null, null)).buf
     let ext = 'm4a'
     if (mp3) {
-        if (!_hasFF) return { buffer, ...ex, ext: 'm4a', mimetype: 'audio/mp4' } // ffmpeg gak ada -> skip, tetap jalan
+        if (!_hasFF) return { buffer, ...ex, ext: 'm4a', mimetype: 'audio/mp4' }
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ttalt-'))
         try {
             const inF = path.join(dir, 'a.m4a'), outF = path.join(dir, 'a.mp3')
@@ -248,7 +245,7 @@ export async function liveBuffers(input) {
     return { items, ...ex }
 }
 
-// foto + motion -> 1 video MP4 (butuh ffmpeg; tanpa ffmpeg, features ini skip)
+// foto + motion -> 1 video MP4
 export async function slideBuffer(input, { perSec = 3 } = {}) {
     if (!_hasFF) throw new Error('mode slide butuh ffmpeg, dan ffmpeg gak ada di sistem ini. Pakai mode photo atau live aja.')
     const ex = await info(input)
@@ -292,7 +289,7 @@ function _slideshow(parts, audio, perStill) {
 
 //CLI
 const _safe = (s) => String(s || 'tiktok').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || 'tiktok'
-// nama file: kalau user kasih argumen output, itu dipakai persis (bukan nempel ekstensi lagi)
+
 function _outName(given, fallback, index, total, ext) {
     if (!given) return total > 1 ? `${fallback}_${index}.${ext}` : `${fallback}.${ext}`
     const e = path.extname(given)

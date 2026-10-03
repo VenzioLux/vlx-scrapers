@@ -41,10 +41,10 @@ const _TTL = 5 * 60_000
 const _jar = new Map()
 const _cache = new Map()
 
-//cookie sesi dari halaman TikTok (ttwid/tt_chain_token — otomatis, tanpa login)
+//cookie sesi dari halaman TikTok (ttwid/tt_chain_token)
 const _cookies = () => [..._jar].map(([k, v]) => `${k}=${v}`).join('; ')
 
-// link -> id halaman (short link balik url-nya, id diisi dari redirect)
+// link -> id halaman
 export async function resolveTarget(raw) {
     let s = String(raw || '').trim()
     if (!s) return null
@@ -97,7 +97,6 @@ function _parseItem(html) {
     return null
 }
 
-// halaman kadang balikin varian CSR tanpa data -> retry sampai dapet
 async function _loadItem(id, candidates) {
     for (const url of candidates) {
         for (let i = 0; i < _RETRY; i++) {
@@ -314,7 +313,7 @@ export async function photoBuffers(input) {
     return { items, ..._meta(ex, { ext: items[0].ext, mimetype: items[0].mimetype, count: items.length }) }
 }
 
-// foto carousel -> 1 video MP4 (butuh ffmpeg; ada music post dipasang jadi audio)
+// foto carousel -> 1 video MP4
 function _slideshow(imgs, audio, perImg) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-slide-'))
     try {
