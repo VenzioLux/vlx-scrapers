@@ -20,13 +20,11 @@ before it lands here. Bukan kumpulan copas, bukan wrapper doang.
   copy satu file.
 
 > Catatan: beberapa scraper punya fitur opsional yang memanfaatkan tool sistem
-> (mis. `ffmpeg` buat nempel-in metadata audio). Kalau tool-nya gak ada, fitur
-> itu di-skip otomatis dan scraper tetep jalan penuh. Satu-satunya syarat
-> yang wajib cuma Node ≥ 18.
->
-> Jadi janji "no npm install" itu: file-nya jalan cukup dengan Node — nothing
-> more. Bukan janji tiap scraper bakal 100% bebas tool eksternal selamanya,
-> tapi bahwa apapun di luar Node sifatnya opsional dan skip-nya graceful.
+> (mis. `ffmpeg` buat nempel-in metadata audio) atau engine pihak ketiga.
+> Kalau tool/engine-nya gak ada atau mati, fitur itu di-skip atau fallback
+> otomatis — scraper tetep jalan. Dan kalau suatu scraper emang butuh
+> dependency, ya pakai — yang penting jalan dan kegunaannya jelas. Bukan
+> dogma "no dependency selalu"; Node ≥ 18 doang yang jadi syarat utama.
 
 ---
 
@@ -43,6 +41,9 @@ before it lands here. Bukan kumpulan copas, bukan wrapper doang.
 4. **Header file = identitas.** Tiap scraper diawali blok `Base / Author /
    Saluran / Features / Usage` — sekali buka file, langsung tau semuanya
    tanpa baca satu baris kode pun.
+5. **Multi-engine, bukan single-engine.** Media yang bisa dari banyak sumber
+   gak digantungin ke satu engine — ada engine utama + fallback, dan sumber
+   yang menang dicatat di output (`engine` field).
 
 ---
 
@@ -53,9 +54,11 @@ scrapers/
 └── downloader/
     ├── yt/
     │   └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
-    └── tiktok/
-        ├── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
-        └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
+    ├── tiktok/
+    │   ├── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
+    │   └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
+    └── spotify/
+        └── spVio.mjs         # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
 ```
 
 Categories follow function, not language or target:
@@ -102,12 +105,31 @@ $ node tikAlt.mjs <url> live  out.mp4        # motion LivePhoto
 $ node tikAlt.mjs <url> slide out.mp4        # foto + motion -> 1 MP4
 ```
 
+Butuh **search**, **metadata lengkap**, **lyric sinkron per baris**
+(`[00:01:23] text`), atau **audio full-duration**? `spVio.mjs` buat
+Spotify — token anonymous, tanpa login, tanpa API key:
+
+```console
+$ node spVio.mjs search "never gonna give you up" 10   # lagu/album/artist/playlist
+$ node spVio.mjs <link|id>                            # metadata track
+$ node spVio.mjs <link|id> album                      # isi album + semua track
+$ node spVio.mjs <link|id> artist                     # profil artist
+$ node spVio.mjs <link|id> lyrics  out.lrc            # lyric sinkron (LRC)
+$ node spVio.mjs <link|id> mp3     out.mp3            # audio FULL 320kbps (multi-engine)
+$ node spVio.mjs <link|id> preview out.mp3            # preview 30 detik (paksa)
+```
+
+Audio full-duration lewat **multi-engine**: engine utama `spotidown.app`
+(MP3 320kbps, full track, metadata embedded) → fallback preview resmi
+30 detik kalau engine mati. Sumber engine dicatat di output (`engine`
+field) biar caller tau persis dari mana audio-nya.
+
 ---
 
 ## Legal & ethics
 
-- Scraper di sini cuma **ngambil konten yang secara teknis bisa diakses
-  publik** — gak ada bypass DRM, gak ada akun/password, gak ada konten privat.
+- Scraper di sini ngambil konten sesuai kemampuan engine-nya — metadata via
+  jalur resmi, media via engine yang tersedia (internal maupun pihak ketiga).
 - File hasil unduhan adalah tanggung jawab si pemake. Hormati hak cipta
   konten kreator.
 - Kalau layanan yang di-scrape minta berhenti, ya kita berhenti. Simple as that.
