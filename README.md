@@ -57,8 +57,10 @@ scrapers/
     ├── tiktok/
     │   ├── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
     │   └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
-    └── spotify/
-        └── spVio.mjs         # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
+    ├── spotify/
+    │   └── spVio.mjs         # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
+    └── ig/
+        └── igVox.mjs         # Instagram: post/reel/carousel/story + search keyword
 ```
 
 Categories follow function, not language or target:
@@ -123,6 +125,23 @@ Audio full-duration lewat **multi-engine**: engine utama `spotidown.app`
 (MP3 320kbps, full track, metadata embedded) → fallback preview resmi
 30 detik kalau engine mati. Sumber engine dicatat di output (`engine`
 field) biar caller tau persis dari mana audio-nya.
+
+Butuh **search Instagram** (yang di app harus login), **story**, atau
+**carousel**? `igVox.mjs` — satu file, tanpa login, tanpa cookie:
+
+```console
+$ node igVox.mjs search "keraton" 20               # profil / post / reel / hashtag
+$ node igVox.mjs <url|shortcode>                   # metadata lengkap
+$ node igVox.mjs <url|shortcode> hd   out.mp4      # video sampai 1440p
+$ node igVox.mjs <url|shortcode> photo gal         # semua foto carousel
+$ node igVox.mjs nasa story        natgeo           # semua story aktif 24 jam
+```
+
+Juga **multi-engine**: Instagram langsung jadi engine utama (metadata
+paling lengkap + 1440p), engine cadangan otomatis kalau kena login-wall —
+hasilnya turun ke 720p dan itu ditulis di output, bukan gagal diam-diam.
+Catatan jujur: Highlight butuh login jadi tidak bisa diambil, dan search
+cuma mencakup konten yang sudah terindeks publik.
 
 ---
 
