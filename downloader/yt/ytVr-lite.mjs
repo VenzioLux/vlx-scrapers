@@ -8,12 +8,17 @@ Features:
 - Direct CDN stream: audio m4a/opus, video adaptive sampai 4K
 - Range paralel anti-throttle (3MB < 1 detik)
 - Auto-mux audio buat video >360p (ffmpeg -c copy)
+- Playlist: daftar lagu + judul, channel, views, durasi, thumbnail, paging otomatis
+- Community post: isi post (teks + gambar) dari halaman channel
 - Zero dependency, Node >= 18
 
 Usage:
   node ytVr-lite.mjs <url>            metadata JSON
   node ytVr-lite.mjs <url> mp3        audio
   node ytVr-lite.mjs <url> mp4 [res]  video (default 720p)
+  node ytVr-lite.mjs <playlist-url|list-id> pl [limit]   daftar isi playlist
+  node ytVr-lite.mjs <playlist-url|list-id> plmp3 [limit] [dir]  unduh audio semua
+  node ytVr-lite.mjs <channel-community-url|post-id> post [limit]   post publik channel
 */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -22,7 +27,19 @@ import os from 'node:os'
 import path from 'node:path'
 
 const YT_EP = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
+const BROWSE_EP = 'https://www.youtube.com/youtubei/v1/browse?prettyPrint=false'
 const UA_WEB = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+// browse (playlist & community post) cuma jalan di client WEB
+const _BROWSE_CLIENT = { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' }
+const _BROWSE_HDR = {
+    'content-type': 'application/json',
+    'user-agent': UA_WEB,
+    'x-youtube-client-name': '1',
+    'x-youtube-client-version': _BROWSE_CLIENT.clientVersion,
+    origin: 'https://www.youtube.com',
+    referer: 'https://www.youtube.com/',
+}
 
 // client chain (UA native)
 const _CLIENTS = [
@@ -76,6 +93,203 @@ export function resolveVideoId(raw) {
     const m = u.pathname.match(/^\/(?:embed|shorts|v|live|watch)\/([a-zA-Z0-9_-]{11})/)
     if (m) return m[1]
     return null
+}
+
+// innertube browse — dipakai playlist & community post
+async function browse(body, { timeout = 25000 } = {}) {
+    const r = await fetch(BROWSE_EP, {
+        method: 'POST',
+        headers: _BROWSE_HDR,
+        body: JSON.stringify({ context: { client: _BROWSE_CLIENT }, ...body }),
+        signal: AbortSignal.timeout(timeout),
+    })
+    const j = await r.json().catch(() => null)
+    if (!j) throw new Error(`browse HTTP ${r.status} — respons bukan JSON (kemungkinan diblokir).`)
+    if (j.error) throw new Error(`browse error ${j.error.code}: ${j.error.message || ''}`)
+    return j
+}
+
+export function resolveListId(raw) {
+    const s = String(raw || '').trim()
+    if (!s) return null
+    if (/^(PL|RD|UU|OLAK5uy_|LL)[A-Za-z0-9_-]{8,}$/.test(s)) return s
+    const m = s.match(/[?&]list=([A-Za-z0-9_-]+)/)
+    return m ? m[1] : null
+}
+
+// YouTube sudah pindah ke lockupViewModel untuk playlist; bentuk lama dipakai sebagai jaring pengaman
+function _pickItems(j) {
+    const c = j?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents
+    if (Array.isArray(c)) return c
+    const old = j?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content
+        ?.sectionListRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents
+    return Array.isArray(old) ? old : []
+}
+
+function _nextContinuation(j) {
+    const walk = (arr) => {
+        for (const it of arr || []) {
+            const t = it?.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token
+            if (t) return t
+        }
+        return null
+    }
+    return walk(_pickItems(j))
+        || walk(j?.onResponseReceivedActions?.[0]?.appendContinuationItemsAction?.continuationItems)
+        || null
+}
+
+function _normLockup(it) {
+    const l = it?.lockupViewModel
+    if (!l?.contentId) return null
+    const md = l.metadata?.lockupMetadataViewModel || {}
+    const rows = md.metadata?.contentMetadataViewModel?.metadataRows || []
+    const parts = rows.flatMap(r => r.metadataParts || []).map(p => p.text?.content).filter(Boolean)
+    const ov = l.contentImage?.thumbnailViewModel?.overlays?.[0]?.thumbnailBottomOverlayViewModel?.badges || []
+    const dur = (ov.find(b => /\d+:\d+/.test(b.thumbnailBadgeViewModel?.text || ''))?.thumbnailBadgeViewModel?.text) || ''
+    const imgs = l.contentImage?.thumbnailViewModel?.image?.sources || []
+    const views = (parts.find(p => /views?$/i.test(p)) || '').replace(/\s*views?$/i, '')
+    return {
+        videoId: l.contentId,
+        title: md.title?.content || '',
+        duration: dur,
+        durationSeconds: dur ? dur.split(':').reduce((a, s) => a * 60 + Number(s), 0) : 0,
+        author: parts[0] || '',
+        views,
+        viewsLabel: views ? `${views} views` : '',
+        thumbnail: imgs.length ? imgs[imgs.length - 1].url : '',
+        url: `https://youtu.be/${l.contentId}`,
+    }
+}
+
+function _normOldPlaylistVideo(r) {
+    return {
+        videoId: r.videoId,
+        title: r.title?.runs?.[0]?.text || '',
+        duration: r.lengthText?.simpleText || '',
+        durationSeconds: Number(r.lengthSeconds || 0),
+        author: r.shortBylineText?.runs?.[0]?.text || '',
+        views: (r.viewCountText?.simpleText || '').replace(/\s*views?$/i, ''),
+        viewsLabel: r.viewCountText?.simpleText || '',
+        thumbnail: (r.thumbnail?.thumbnails || []).slice(-1)[0]?.url || '',
+        url: `https://youtu.be/${r.videoId}`,
+    }
+}
+
+export async function playlist(input, { limit = 100, timeout = 25000 } = {}) {
+    const listId = resolveListId(input)
+    if (!listId) throw new Error('Playlist ID tidak terbaca. Contoh: https://www.youtube.com/playlist?list=PLxxxxxxxx atau PLxxxxxxxx langsung.')
+    const j = await browse({ browseId: 'VL' + listId }, { timeout })
+
+    const side = j?.sidebar?.playlistSidebarRenderer?.items?.[0]?.playlistSidebarPrimaryInfoRenderer
+    const title = j?.header?.playlistHeaderRenderer?.title?.runs?.[0]?.text || side?.title?.runs?.[0]?.text || ''
+    const countText = side?.stats?.[0]?.runs?.[0]?.text || ''
+    const total = Number(String(countText).replace(/[^\d]/g, '')) || 0
+
+    const out = []
+    const seen = new Set()
+    let page = j
+    while (page && out.length < limit) {
+        for (const it of _pickItems(page)) {
+            const n = _normLockup(it) || (it?.playlistVideoRenderer ? _normOldPlaylistVideo(it.playlistVideoRenderer) : null)
+            if (!n || !n.videoId || seen.has(n.videoId)) continue
+            seen.add(n.videoId)
+            out.push(n)
+            if (out.length >= limit) break
+        }
+        const tok = _nextContinuation(page)
+        if (!tok || out.length >= limit) break
+        page = await browse({ continuation: tok }, { timeout })
+    }
+    if (!out.length) throw new Error('Playlist ini kosong, private, atau ID-nya salah.')
+    return {
+        status: 'success',
+        listId, title, totalTracks: total || out.length,
+        returned: out.length,
+        hasMore: !!(total && out.length < total),
+        url: `https://www.youtube.com/playlist?list=${listId}`,
+        tracks: out,
+    }
+}
+
+// community post: diambil dari HTML SSR halaman /@channel/community, tanpa login
+export function resolvePostId(raw) {
+    const s = String(raw || '').trim()
+    if (!s) return null
+    const m = s.match(/(Ugx[A-Za-z0-9_-]{10,})/)
+    return m ? m[1] : null
+}
+
+export function resolveChannel(raw) {
+    const s = String(raw || '').trim()
+    if (!s) return null
+    const m = s.match(/youtube\.com\/@([A-Za-z0-9_.-]{3,30})/) || s.match(/\/(?:c|channel|user)\/([A-Za-z0-9_.-]{3,30})/)
+    return m ? m[1] : null
+}
+
+function _collectPosts(root, out = []) {
+    if (!root || typeof root !== 'object') return out
+    if (root.backstagePostRenderer) {
+        const p = root.backstagePostRenderer
+        if (p.postId) out.push(p)
+    }
+    for (const k of Object.keys(root)) {
+        if (typeof root[k] === 'object') _collectPosts(root[k], out)
+    }
+    return out
+}
+
+function _normPost(p) {
+    const runs = (r) => (r?.runs || []).map(x => x.text).join('')
+    return {
+        postId: p.postId,
+        text: runs(p.contentText),
+        author: runs(p.authorText),
+        likes: p.voteCount?.simpleText || '',
+        publishedAt: p.publishedTimeText?.simpleText || '',
+        images: (p.backstageAttachment?.image?.sources || []).map(s => s.url),
+        videoId: p.backstageAttachment?.video?.playableVideo?.videoId || '',
+        url: `https://www.youtube.com/post/${p.postId}`,
+    }
+}
+
+export async function post(input, { limit = 10, timeout = 30000 } = {}) {
+    const ch = resolveChannel(input)
+    const wantId = resolvePostId(input)
+    // tanpa channel, cari tahu lewat ID post -> halamannya biasanya kena 404, jadi wajib ada channel
+    if (!ch) throw new Error('Channel tidak terbaca. Pakai: node ytVr-lite.mjs https://www.youtube.com/@RickAstleyYT/community post')
+
+    const url = `https://www.youtube.com/@${ch}/community`
+    const r = await fetch(url, { headers: { 'user-agent': UA_WEB, 'accept-language': 'en-US,en;q=0.9' }, signal: AbortSignal.timeout(timeout) })
+    const html = await r.text()
+    if (r.status === 404) throw new Error(`Halaman community untuk @${ch} tidak ada (404).`)
+    const m = html.match(/var ytInitialData\s*=\s*({.+?});<\/script>/)
+    if (!m) throw new Error('ytInitialData tidak ketemu di halaman community — YouTube mungkin ganti layout, atau channel-nya private.')
+
+    let data
+    try { data = JSON.parse(m[1]) } catch { throw new Error('ytInitialData gagal di-parse (kemungkinan ada karakter aneh di teks post).') }
+
+    const raw = _collectPosts(data)
+    const seen = new Set()
+    const posts = []
+    for (const p of raw) {
+        if (seen.has(p.postId)) continue
+        seen.add(p.postId)
+        posts.push(_normPost(p))
+    }
+    if (!posts.length) throw new Error(`Tidak ada post publik di @${ch}. Bisa channel-nya memang tidak pernah posting, atau semua post-nya private.`)
+
+    const picked = wantId ? posts.filter(p => p.postId === wantId) : posts
+    const out = (picked.length ? picked : posts).slice(0, Math.max(1, limit))
+    return {
+        status: 'success',
+        channel: `@${ch}`,
+        url,
+        found: posts.length,
+        returned: out.length,
+        ...(wantId && picked.length ? {} : { note: wantId ? `Post ${wantId} tidak ada di halaman publik; menampilkan post terbaru.` : '' }),
+        posts: out,
+    }
 }
 
 // innertube player
@@ -398,6 +612,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
     const [, , target, mode = 'info', opt] = process.argv
     if (!target) {
         console.log('pakai: node ytVr-lite.mjs <url|videoId> [info|mp3|mp4] [opt]')
+        console.log('       node ytVr-lite.mjs <playlist> [pl|plmp3] [limit] [dir]')
+        console.log('       node ytVr-lite.mjs <post-url> post')
         process.exit(1)
     }
     // dump hasil (minus buffer) sebagai JSON lengkap — metadata, desc, stream, dll
@@ -433,6 +649,51 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             const f = `${r.title.replace(/[<>:"/\\|?*]/g, '_')}_${r.height}p.mp4`
             fs.writeFileSync(f, r.buffer)
             _dump(r, f, (Date.now() - t0) / 1000)
+        } catch (e) {
+            console.error('GAGAL:', e.message)
+            process.exit(1)
+        }
+    } else if (mode === 'pl') {
+        try {
+            const r = await playlist(target, { limit: Math.min(Number(opt) || 100, 500) })
+            console.log(JSON.stringify(r, null, 2))
+        } catch (e) {
+            console.error('GAGAL:', e.message)
+            process.exit(1)
+        }
+    } else if (mode === 'plmp3') {
+        const limit = Math.min(Number(opt) || 20, 500)
+        const dir = process.argv[5] || 'playlist'
+        const t0 = Date.now()
+        try {
+            const r = await playlist(target, { limit })
+            fs.mkdirSync(dir, { recursive: true })
+            const done = []
+            const failed = []
+            for (const [i, t] of r.tracks.entries()) {
+                try {
+                    const a = await audioBuffer(t.videoId)
+                    const f = path.join(dir, `${String(i + 1).padStart(3, '0')}_${a.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 70)}.${a.ext}`)
+                    fs.writeFileSync(f, a.buffer)
+                    done.push({ index: i + 1, file: f, size: a.buffer.length, durationSeconds: t.durationSeconds })
+                } catch (e) {
+                    failed.push({ index: i + 1, videoId: t.videoId, title: t.title, error: e.message })
+                }
+            }
+            console.log(JSON.stringify({
+                status: 'success',
+                playlist: r.title, listId: r.listId, url: r.url,
+                requested: r.returned, downloaded: done.length, failed: failed.length,
+                dir, files: done, errors: failed,
+                timeSec: +((Date.now() - t0) / 1000).toFixed(2),
+            }, null, 2))
+        } catch (e) {
+            console.error('GAGAL:', e.message)
+            process.exit(1)
+        }
+    } else if (mode === 'post') {
+        try {
+            console.log(JSON.stringify(await post(target, { limit: Math.min(Number(opt) || 10, 50) }), null, 2))
         } catch (e) {
             console.error('GAGAL:', e.message)
             process.exit(1)
