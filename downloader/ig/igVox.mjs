@@ -85,9 +85,6 @@ const _IGM_VER = '0.1.62'
 let _igmClient = null
 
 
-
-//kol.id dikembalikan khusus buat story, satu-satunya engine yg bisa baca story tanpa login
-//post/reel/carousel ga pake ini lagi, yg lebih cepat savefromins
 function _serial(fn) {
     const next = _kolChain.then(async () => { await sleep(_KOL_GAP); return fn() })
     _kolChain = next.catch(() => { })
@@ -345,8 +342,6 @@ async function _nativeFetch(t) {
     }
 }
 
-//IG bales 302 ke login buat hampir semua post/reel, dan tiap percobaan itu mahal banget diokia
-//sekali kena login-wall, engine utama diem dulu 10 menit biar request berikutnya ga nunggu-gantung
 let _nativeDown = 0
 const _NATIVE_DOWN = 10 * 60_000
 
@@ -513,7 +508,6 @@ async function _kolStoryAudio(t, mp3) {
     }
 }
 
-//savefromins cuma nemu 1 gambar per elemen (sisanya quality "0X0" yang cuma placeholder)
 const _SFI_JUNK = /^0+\s*[xX]?\s*0*$/i
 
 function _sfiResources(m) {
@@ -522,7 +516,6 @@ function _sfiResources(m) {
     return vs.map(r => {
         const q = String(r.quality || '').trim()
         const format = String(r.format || '').toLowerCase()
-        //kualitas kosong = file progressive yg audio-nya sudah nempel, sudah dicek di 3 reel
         return {
             label: q || (isVideo ? 'HD' : 'original'),
             format,
@@ -534,8 +527,6 @@ function _sfiResources(m) {
 }
 
 const _SFI_RANK = { '1080P': 5, '1080p': 5, '720P': 4, '720p': 4, '480P': 3, '480p': 3, '360P': 2, '360p': 2, '240P': 1, '240p': 1 }
-
-//720P/360P dari savefromins itu video doang, jadi file progressive (ada audio) selalu didahulukan
 const _sfiBest = (vs) => vs.reduce((a, b) => {
     if (!!b.muxed !== !!a.muxed) return b.muxed ? b : a
     return (_SFI_RANK[b.label] || 0) >= (_SFI_RANK[a.label] || 0) ? b : a
@@ -627,10 +618,6 @@ async function _sfiInfo(t) {
     }
 }
 
-//engine ig.media, khusus buat angka like/komentar/view
-//backend-nya milik situs ig.media, request-nya ditandatangani HMAC SHA256
-//kuncinya ada di bundle publik sisi client, jadi bisa dipanggil langsung tanpa browser
-//kuota cuma 2-3 request per client-id, makanya id-nya dirotasi pas kena 403
 const _igmId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16)
 
 async function _igmToken(cid) {
@@ -683,14 +670,8 @@ function _igmNum(n) {
     return Number.isFinite(Number(n)) && n !== null && n !== undefined ? Number(n) : null
 }
 
-//engine savefromins, engine media utama: URL CDN langsung, multi-resolusi, plus tanggal + komentar
-//engine ig.media, engine kedua: satu-satunya yang bisa baca angka view/play_count
 const _GENERIC_CAPTION = /^(instagram(\s+download)?|download|untitled|photo|video|reel)$/i
 
-//kol.id dikembalikan khusus buat story, satu-satunya engine yg bisa baca story tanpa login
-
-//engine savefromins, isi kekurangannya: tanggal unggah + cuplikan komentar + daftar resolusi
-//endpoint-nya publik, cuma POST form-urlencoded, ga ada token sama sekali
 async function _sfiRaw(url) {
     const hit = _cacheGet(_sfiCache, url, _SFI_TTL)
     if (hit) return hit
@@ -708,7 +689,6 @@ async function _sfiRaw(url) {
 
 const _sfiParts = (d) => (d.media || []).flatMap(m => _sfiResources(m))
 
-//merge angka dari ig.media + savefromins ke meta yg udah ada, media tetap dari engine sebelumnya
 async function _engage(meta, url) {
     const [igm, sfi] = await Promise.all([
         _igmRaw(url).catch(() => null),
@@ -731,7 +711,6 @@ async function _engage(meta, url) {
         .filter(c => c?.text)
         .map(c => ({ username: c.username || '', text: String(c.text).slice(0, 300) }))
     const variants = sfi ? _sfiParts(sfi) : []
-
     return {
         ...meta,
         caption,
@@ -917,7 +896,6 @@ export async function search(keyword, { limit = 20, type = 'all', page = 1 } = {
         watermark: 'VenzioLûx — Vloûte Cataclysm',
     }
 
-    // cache hasil supaya query yang sama tidak menghajar mesin search lagi
     if (_cseRes.size > 60) _cseRes.delete(_cseRes.keys().next().value)
     _cseRes.set(key, { at: Date.now(), data: result })
     return result
@@ -929,14 +907,12 @@ function _asStory(t) {
 
 export async function info(input) {
     const t = resolveTarget(input)
-    // _raw, _media, _igm dan _sfi itu internal, jangan pernah keluar ke caller
     const clean = ({ _raw, _media, _igm, _sfi, ...rest }) => rest
     if (t.kind === 'story') return clean(await _kolStoryInfo(t))
     try {
         return clean(await _nativeInfo(t))
     } catch (e) {
         if (t.ambiguous) {
-            //username polos bisa jadi shortcode, jadi coba artikan story dulu lewat kol.id
             const s = _asStory(t)
             try { return clean(await _kolStoryInfo(s)) } catch { }
         }
@@ -970,7 +946,6 @@ const _videoUrl = (it, raw) => {
     throw new Error('item ini gak punya video.')
 }
 
-// metadata dari engine cadangan, bentuknya sama dengan info() supaya semua mode konsisten
 async function _sfiMeta(t) {
     const { _raw, _media, ...meta } = await _sfiInfo(t)
     const { _igm, _sfi, ...rest } = await _engage(meta, t.url)
@@ -1012,7 +987,6 @@ export async function videoBuffer(input, { hd = false } = {}) {
 async function _sfiAudio(t, mp3) {
     const d = await _sfiSolve(t.url)
     const item = d.items.find(x => x.kind === 'video') || d.items[0]
-    //file progressive (audio udah nempel) wajib, rendition 720P/360P cuma video doang
     const pick = item?.variants?.find(v => v.muxed)
     if (!pick?.url) throw new Error('savefromins tidak memberi file video yang audio-nya sudah nempel, jadi audio ga bisa diekstrak.')
     const raw = await _get(pick.url, { ...HDR_CDN, referer: BASE + '/' })
@@ -1139,7 +1113,6 @@ const _slim = (ex) => {
 //CLI
 const _safe = (s) => String(s || 'instagram').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || 'instagram'
 
-//author bisa objek atau string, dan username sering kosong, jadi jangan pernah dibikin "[object Object]"
 const _who = (r) => r?.author?.username || r?.author?.fullName || (typeof r?.author === 'string' ? r.author : '') || r?.user || ''
 
 const _base = (r) => {
@@ -1165,7 +1138,6 @@ function _outName(given, fallback, index, total, ext) {
 if (process.argv[1] && import.meta.url.endsWith('/' + path.basename(process.argv[1]))) {
     const [, , a1, a2, a3, a4] = process.argv
     const emit = (r, extra) => {
-        // buffer & field internal jangan ikut ke JSON, kalau tidak output jadi ratusan ribu angka
         const { items, buffer, _raw, _media, _igm, _sfi, ...rest } = r
         const out = { status: 'success', watermark: 'VenzioLûx — Vloûte Cataclysm', ...rest, ...extra }
         if (items) out.filesMeta = items.map(i => ({ index: i.index, ext: i.ext, width: i.width, height: i.height, url: i.url }))
