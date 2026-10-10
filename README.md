@@ -59,6 +59,8 @@ scrapers/
     │   └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
     ├── spotify/
     │   └── spVio.mjs         # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
+    ├── fb/
+    │   └── fbFast.mjs        # Facebook video/reel: HD+SD, audio, tanpa login
     └── ig/
         └── igVox.mjs         # Instagram: post/reel/carousel/story + search keyword
 ```
@@ -142,6 +144,24 @@ paling lengkap + 1440p), engine cadangan otomatis kalau kena login-wall —
 hasilnya turun ke 720p dan itu ditulis di output, bukan gagal diam-diam.
 Catatan jujur: Highlight butuh login jadi tidak bisa diambil, dan search
 cuma mencakup konten yang sudah terindeks publik.
+
+Facebook publik **tanpa login**? `fbFast.mjs` — video/reel aja, HD + SD:
+
+```console
+$ node fbFast.mjs <url>                 # metadata super lengkap + semua resolusi
+$ node fbFast.mjs <url> hd  out.mp4     # video HD
+$ node fbFast.mjs <url> sd  out.mp4     # video SD
+$ node fbFast.mjs <url> mp3 out.mp3     # audio MP3 (butuh ffmpeg)
+$ node fbFast.mjs <url> audio out.m4a   # audio M4A (butuh ffmpeg)
+```
+
+Dua celah kepake bareng: halaman post buat og:title/caption/page, dan
+`/plugins/video.php` buat `hd_src` + `sd_src`. Dua halaman di-fetch persis
+bersamaan dan cuma dibaca sampai data ketemu, jadi metadata balik < 1 detik;
+download pakai Range paralel 4 koneksi streaming ke disk.
+Catatan jujur: **foto tidak support** — halaman foto butuh login walau
+publik, dan angka views/like/comment cuma format ringkas FB ("2.8J views"),
+presisinya butuh login.
 
 ---
 
