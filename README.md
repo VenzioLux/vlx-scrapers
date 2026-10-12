@@ -51,24 +51,37 @@ before it lands here. Bukan kumpulan copas, bukan wrapper doang.
 
 ```
 scrapers/
-└── downloader/
-    ├── yt/
-    │   └── ytVr-lite.mjs     # YouTube extractor & downloader no-PoToken
-    ├── tiktok/
-    │   ├── tikMw.mjs         # TikTok downloader (video/audio/photo/slide)
-    │   └── tikAlt.mjs        # Alternatif: search + LivePhoto via resolver TikWM
-    ├── spotify/
-    │   └── spVio.mjs         # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
-    ├── fb/
-    │   └── fbFast.mjs        # Facebook video/reel: HD+SD, audio, tanpa login
-    └── ig/
-        └── igVox.mjs         # Instagram: post/reel/carousel/story + search keyword
+├── downloader/                   # media grabbers — output langsung jadi file media
+│   ├── yt/
+│   │   └── ytVr-lite.mjs         # YouTube extractor & downloader no-PoToken
+│   ├── tiktok/
+│   │   ├── tikMw.mjs             # TikTok downloader (video/audio/photo/slide)
+│   │   └── tikAlt.mjs            # Alternatif: search + LivePhoto via resolver TikWM
+│   ├── spotify/
+│   │   └── spVio.mjs             # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
+│   ├── fb/
+│   │   └── fbFast.mjs             # Facebook video/reel: HD+SD, audio, tanpa login
+│   └── ig/
+│       └── igVox.mjs             # Instagram: post/reel/carousel/story + search keyword
+├── uploader/                     # push file ke layanan orang — output link/status
+│   └── top4top.mjs               # upload ke top4top.me
+└── stalk/                        # input username/handle — output profil + daftar post
+    └── jne/
+        └── jnetrack.mjs          # tracking resi JNE, tanpa browser
+└── other/                        # belum masuk kategori — dikumpulin dulu, dipilah belakangan
+    └── julzFnd.mjs               # cari URL preset Alight Motion dari video TikTok/YT/IG
 ```
 
 Categories follow function, not language or target:
 
-- `downloader/` — media grabbers (audio/video/gambar)
-- kategori lain mengikuti kalau ada scraper baru
+- `downloader/` — input URL konten, output file media (mp4/mp3/jpg)
+- `uploader/` — input file lokal, output link/status dari layanan orang
+- `stalk/` — input username/nama, output profil + daftar post (bisa juga tanpa login)
+- `other/` — scraper yang belum punya kategori jelas (mis. output link, bukan media)
+
+Daftar di atas cuma yang **udah naik ke repo**. Scraper yang masih dikerjakan
+atau belum di-acc ada di `staging/` (di luar repo git), jadi nggak kebetulan
+ke-`git add`.
 
 ---
 
@@ -162,6 +175,23 @@ download pakai Range paralel 4 koneksi streaming ke disk.
 Catatan jujur: **foto tidak support** — halaman foto butuh login walau
 publik, dan angka views/like/comment cuma format ringkas FB ("2.8J views"),
 presisinya butuh login.
+
+Butuh **link preset Alight Motion** (5mb & XML) yang biasa dikubur di komentar
+video TikTok/YouTube/Instagram? `julzFnd.mjs` — tempel linknya, presetnya keluar.
+Ini **bukan downloader**: output-nya link preset, bukan file, makanya masuk
+folder `other/` dulu.
+
+```console
+$ node other/julzFnd.mjs <url>          # cari preset + metadata lengkap
+$ node other/julzFnd.mjs <url> presets  # cuma daftar URL preset
+$ node other/julzFnd.mjs <url> open     # buka semua url preset di browser
+```
+
+Balasan komentar ikut dibaca, jadi preset yang cuma dikasih di balasan tetep
+kedetek (`byAuthor` nandain kalau dari author sendiri). Batasan jujur: cuma
+nemu yang udah publik di komentar/deskripsi — kalau presetnya ada di DM atau
+grup private, nggak baket nemu. Situs pakai cookie-gate `am_c` (timestamp+hash,
+divalidasi server) yang diambil dari HTML pertama dan di-cache 1 jam.
 
 ---
 
