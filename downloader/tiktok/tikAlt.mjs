@@ -130,8 +130,14 @@ export async function resolveTarget(raw) {
     if (!s) return null
     if (/^\d{15,20}$/.test(s)) s = `https://www.tiktok.com/@i/video/${s}`
     else if (!/^https?:\/\//i.test(s)) {
-        if (/^((www|m|vt|vm|v)\.)?tiktok\.com(\/|$)/i.test(s)) s = 'https://' + s
+        if (/^((www|m|vt|vm|v|www\.tt)\.)?(tiktok\.com|tt\.site)(\/|$)/i.test(s)) s = 'https://' + s
         else return null
+    }
+    if (/tt\.site\//i.test(s)) {
+        const hop = await fetch(s, { redirect: 'manual' })
+        const loc = hop.headers.get('location') || s
+        const id = loc.match(/\/(?:video|photo)\/(\d{15,20})/)?.[1]
+        if (id) s = `https://www.tiktok.com/@i/video/${id}`
     }
     return s
 }

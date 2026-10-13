@@ -11,8 +11,8 @@ Features:
 - Watermark: VenzioLûx — Vloûte Cataclysm
 
 Usage:
-  node top4up.mjs <file-path>  -> upload file and output JSON with links
-  node top4up.mjs <file-path> link -> print only download link
+  node top4top.mjs <file-path>  -> upload file and output JSON with links
+  node top4top.mjs <file-path> link -> print only download link
 */
 
 import { fileURLToPath } from 'node:url'
@@ -96,7 +96,7 @@ export async function uploadFile(filePath, options = {}) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const filePath = process.argv[2]
   if (!filePath) {
-    console.error('Usage: node top4up.mjs <file-path> [link]')
+    console.error('Usage: node top4top.mjs <file-path> [link]')
     process.exit(1)
   }
   uploadFile(filePath).then(res => {

@@ -37,11 +37,10 @@ const _BIG = 8 * 1024 * 1024
 const _CONC = 8
 const _RETRY = 5
 const _TTL = 5 * 60_000
-
 const _jar = new Map()
 const _cache = new Map()
 
-//cookie sesi dari halaman TikTok (ttwid/tt_chain_token)
+// ttwid/tt_chain_token
 const _cookies = () => [..._jar].map(([k, v]) => `${k}=${v}`).join('; ')
 
 // link -> id halaman
@@ -156,8 +155,9 @@ export async function extract(input, { fresh = false } = {}) {
 
     let id = tgt.id
     if (!id) {
-        const res = await _fetch(tgt.url)
-        id = String(res.url).match(/\/(?:video|photo)\/(\d{15,20})/)?.[1] || String(res.url).match(/(\d{15,20})/)?.[1]
+        const hop = await fetch(tgt.url, { headers: _HDRS, redirect: 'manual' })
+        const loc = hop.headers.get('location') || tgt.url
+        id = loc.match(/\/(?:video|photo)\/(\d{15,20})/)?.[1] || loc.match(/(\d{15,20})/)?.[1]
         if (!id) throw new Error('gak bisa resolve ID dari link pendek ini.')
     }
 
@@ -239,7 +239,6 @@ export async function downloadStream(urlIn, { refresh = null, timeout = 180000 }
     return out
 }
 
-// refresh URL pas 403/expired — re-extract (playAddr yg lolos cookie)
 const _refreshVideo = async (i) => (await extract(i, { fresh: true })).video.playAddr || null
 const _refreshMusic = async (i) => (await extract(i, { fresh: true })).music.url || null
 const _refreshImage = async (i, n) => (await extract(i, { fresh: true })).images[n] || null
