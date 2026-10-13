@@ -61,8 +61,10 @@ scrapers/
 │   │   └── spVio.mjs             # Spotify: search, metadata, lyric sinkron, audio full (multi-engine)
 │   ├── fb/
 │   │   └── fbFast.mjs             # Facebook video/reel: HD+SD, audio, tanpa login
-│   └── ig/
-│       └── igVox.mjs             # Instagram: post/reel/carousel/story + search keyword
+│   ├── ig/
+│   │   └── igVox.mjs             # Instagram: post/reel/carousel/story + search keyword
+│   └── x/
+│       └── xGst.mjs              # X/Twitter: video sampai 4K asli + foto, tanpa login
 ├── uploader/                     # push file ke layanan orang — output link/status
 │   └── top4top.mjs               # upload ke top4top.me
 └── stalk/                        # input username/handle — output profil + daftar post
@@ -175,6 +177,27 @@ download pakai Range paralel 4 koneksi streaming ke disk.
 Catatan jujur: **foto tidak support** — halaman foto butuh login walau
 publik, dan angka views/like/comment cuma format ringkas FB ("2.8J views"),
 presisinya butuh login.
+
+X / Twitter sampai **4K asli** tanpa login? `xGst.mjs` — video + foto, nol
+cookie, nol API key, nol browser. Nama "Gst" = guest-token, itu intinya:
+
+```console
+$ node xGst.mjs <username>                 # daftar 40 tweet terbaru yang ada medianya
+$ node xGst.mjs <username> profile         # bio, follower, verified, avatar
+$ node xGst.mjs <url-tweet|id>             # metadata + semua variant
+$ node xGst.mjs <url-tweet|id> info        # semua resolusi + bitrate, TANPA download
+$ node xGst.mjs <url-tweet|id> 1080p out.mp4   # 4k / 2k / 1080p / 720p / 480p / best
+$ node xGst.mjs <url-tweet|id> photo gal   # semua foto, resolusi asli
+```
+
+Guest token dibuat sendiri dari endpoint X (`guest/activate.json`), cache
+~3 jam, auto-refresh pas 401/403. Download pakai **single-stream + resume** —
+CDN X kenceng per-koneksi (~10-13 MB/s) dan range paralel 6x justru lebih
+lambat, jadi satu koneksi lurus ke disk. Catatan jujur: **nggak ada keyword
+search** — X wajib login buat search (`SearchTimeline` gak ada di bundle
+publik sama sekali), jadi input yang jalan cuma username atau URL tweet; dan
+queryId GraphQL X bisa dirotasi kapan aja — kalau muncul error
+`queryId udah dirotasi`, itu maintenance berkala, bukan bug.
 
 Butuh **link preset Alight Motion** (5mb & XML) yang biasa dikubur di komentar
 video TikTok/YouTube/Instagram? `julzFnd.mjs` — tempel linknya, presetnya keluar.
