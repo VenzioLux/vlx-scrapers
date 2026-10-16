@@ -63,8 +63,10 @@ scrapers/
 │   │   └── fbFast.mjs             # Facebook video/reel: HD+SD, audio, tanpa login
 │   ├── ig/
 │   │   └── igVox.mjs             # Instagram: post/reel/carousel/story + search keyword
-│   └── x/
-│       └── xGst.mjs              # X/Twitter: video sampai 4K asli + foto, tanpa login
+│   ├── x/
+│   │   └── xGst.mjs              # X/Twitter: video sampai 4K asli + foto, tanpa login
+│   └── lk21/
+│       └── lk21P2p.mjs              # LK21 (film/series ID): info+streams, download video MP4 (p2p/playcdn)
 ├── uploader/                     # push file ke layanan orang — output link/status
 │   └── top4top.mjs               # upload ke top4top.me
 └── stalk/                        # input username/handle — output profil + daftar post
@@ -198,6 +200,25 @@ search** — X wajib login buat search (`SearchTimeline` gak ada di bundle
 publik sama sekali), jadi input yang jalan cuma username atau URL tweet; dan
 queryId GraphQL X bisa dirotasi kapan aja — kalau muncul error
 `queryId udah dirotasi`, itu maintenance berkala, bukan bug.
+
+Butuh **stream film/series Indonesia** dari LK21 — metadata lengkap, semua server stream, sampai **unduh videonya jadi MP4**? `lk21P2p.mjs` — SSR HTML doang, tanpa login, tanpa cookie, tanpa browser:
+
+```console
+$ node lk21P2p.mjs home                       # halaman depan (metadata lengkap)
+$ node lk21P2p.mjs section latest-movies 2    # section: latest-movies, latest-series, ...
+$ node lk21P2p.mjs search "spider man"        # cari film/series (via mirror)
+$ node lk21P2p.mjs <url|slug>                 # info detail super lengkap + semua stream
+$ node lk21P2p.mjs <url|slug> streams         # cuma daftar URL streaming
+$ node lk21P2p.mjs <url|slug> download out.mp4   # unduh video (default .mp4)
+```
+
+Mesin utama = **p2p/playcdn**: `videonode.de/api.php` → `playcdn.de/verify` → m3u8 → segmen.
+Download paralel round-robin antar domain mirror, dengan **bypass blokir IP**: playlist
+me-rotate ~40 domain `duck.*.xyz` (banyak mati 403 Cloudflare) — domain yang hidup di-probe,
+lalu tiap segmen ada fallback. Output `.mp4` tanpa re-encode (`ffmpeg -c copy` kalau ffmpeg
+ada; fallback `.ts` kalau nggak). `download` mengunduh **satu** video per run — buat series,
+jalankan per episode. Catatan jujur: halaman `tv12.lk21official.cc` kena Cloudflare Turnstile
+dari IP datacenter → jalan di IP residential/user, gagal 403 di VPS.
 
 Butuh **link preset Alight Motion** (5mb & XML) yang biasa dikubur di komentar
 video TikTok/YouTube/Instagram? `julzFnd.mjs` — tempel linknya, presetnya keluar.
