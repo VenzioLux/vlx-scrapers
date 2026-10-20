@@ -106,7 +106,7 @@ function _norm(id, v, watermark) {
         },
         duration: Number(v.duration) || 0,
         createTime: Number(v.create_time) || 0,
-        createdAt: v.create_time ? new Date(Number(v.create_time) * 1000).toISOString() : null,
+        createdAt: v.create_time ? new Date(Number(v.create_time) * 1000).toISOString() : '',
         stats: {
             playCount: v.play_count || 0, likeCount: v.digg_count || 0,
             commentCount: v.comment_count || 0, shareCount: v.share_count || 0,

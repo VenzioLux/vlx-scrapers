@@ -125,7 +125,7 @@ function _normalize(id, item) {
         title: (item.desc || '').split('\n')[0].slice(0, 200),
         desc: item.desc || '',
         createTime: Number(item.createTime) || 0,
-        createdAt: item.createTime ? new Date(Number(item.createTime) * 1000).toISOString() : null,
+        createdAt: item.createTime ? new Date(Number(item.createTime) * 1000).toISOString() : '',
         duration: Number(v.duration) || 0,
         width: v.width || 0,
         height: v.height || 0,
