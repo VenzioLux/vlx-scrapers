@@ -514,7 +514,6 @@ async function detail(link) {
   }
   const html = r.body
   if (cfPage(html)) throw new Blocked(`${link} 403 forbidden cloudflare challenge`)
-  // soft-404: slug ga ada -> situs redirect ke halaman depan (path "/")
   let finalPath = ''
   try { finalPath = new URL(r.url).pathname } catch {}
   if (finalPath === '/' || finalPath === '') {
@@ -766,15 +765,17 @@ const downloadHls = async (segs, hosts, out) => {
       const order = hosts.map((_, k) => hosts[(i + k) % hosts.length])
       let buf = null
       let last = ''
-      for (const h of order) {
-        try {
-          const r = await fetch(`https://${h}${s.path}`, { headers: SEG_HDR, signal: AbortSignal.timeout(60000) })
-          if (!r.ok) { last = `${h} ${r.status}`; continue }
-          const b = Buffer.from(await r.arrayBuffer())
-          if (!b.length || b.slice(0, 5).toString('latin1').toLowerCase().startsWith('<!doc')) { last = `${h} html`; continue }
-          buf = b
-          break
-        } catch (e) { last = e.message }
+      for (let round = 0; round < 3 && !buf; round++) {
+        for (const h of order) {
+          try {
+            const r = await fetch(`https://${h}${s.path}`, { headers: SEG_HDR, signal: AbortSignal.timeout(60000) })
+            if (!r.ok) { last = `${h} ${r.status}`; continue }
+            const b = Buffer.from(await r.arrayBuffer())
+            if (!b.length || b.slice(0, 5).toString('latin1').toLowerCase().startsWith('<!doc')) { last = `${h} html`; continue }
+            buf = b
+            break
+          } catch (e) { last = `${h} ${e.message}${e.cause && e.cause.code ? ' ' + e.cause.code : ''}` }
+        }
       }
       if (!buf) {
         const e = new Error(`segment ${s.name} failed ${last || 'all hosts rejected'}`)
