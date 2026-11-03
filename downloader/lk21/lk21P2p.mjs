@@ -6,16 +6,18 @@ Saluran : https://whatsapp.com/channel/0029VarG5MaGE56eduecoC0N
 Features:
 - LK21 streaming: home, section, search, info, streams, download
 - Multi-base URL, auto fallback mirror
-- Base bisa override: --base <url> / env LK21_BASE
-- Fetch SSR HTML only, no login, no cookie, no browser
+- Base bisa override: --base <url>
+- SSR HTML via fetch langsung ke tiap host (tanpa login, tanpa cookie)
 - Info detail lengkap + semua server stream
-- Stream resolve: videonode.de/api.php -> player final
-- Download mode: file video super cepat + bypass blokir IP
+- Series: halaman mirror redirect ke host series (tv.nontondrama.vip);
+  mode `episodes` (daftar episode dari <script id="season-data">) + `--ep <n>`
+- Stream resolve: videonode.de/api.php (p2p/cast/hydrax) -> player final
+- Search via JSON endpoint situs (gudangvape.com/search.php) — host terpisah, fetch langsung
+- Download mode: file video super cepat 
   -> chain p2p/playcdn: videonode api.php -> playcdn/verify -> m3u8 -> segmen
   -> bypass: playlist rotate ~40 domain duck.*.xyz (banyak mati 403),
      auto pilih domain yang hidup + unduh paralel + fallback per-segmen
   -> output .mp4 (remux ffmpeg -c copy kalau ada; fallback .ts tanpa ffmpeg)
-- Search via mirror tv.nontonfilm.red, URL rewrite ke BASE
 - Home pagination: /loadmore-home/page/N
 - Output JSON, zero null (field kosong di-omit), zero dependency Node >=18
 - Error JSON seragam: ok:false + kind + hint di stdout (exit 1)
@@ -26,19 +28,23 @@ Usage:
   node lk21P2p.mjs <url>|slug info        sama, eksplisit
   node lk21P2p.mjs <url>|slug streams     cuma daftar URL streaming (embed + player final)
   node lk21P2p.mjs <url>|slug download [out]  unduh video (default <slug>.mp4; fallback .ts kalau gak ada ffmpeg)
+  node lk21P2p.mjs <url>|slug episodes    daftar episode series (per-episode, judul + url)
+  node lk21P2p.mjs <url>|slug --ep <n> [info|streams|download]  ambil 1 episode series pilihan
   node lk21P2p.mjs home                   semua item unik halaman depan (field lengkap)
   node lk21P2p.mjs home <page>            halaman berikutnya (2,3,...) via loadmore
   node lk21P2p.mjs section <tipe> [page]  section khusus: latest-movies, latest-series,
                                        latest-action, latest-comedy, latest-horror,
                                        latest-korea, latest-india, latest-romance,
                                        latest-thailand
-  node lk21P2p.mjs search "<keyword>"     cari film/series (via mirror, hasil di-rewrite)
+  node lk21P2p.mjs search "<keyword>"     cari film/series (JSON endpoint situs)
   node lk21P2p.mjs --base <mirror> home   pakai base URL tertentu
 
 Contoh:
   node lk21P2p.mjs https://tv12.lk21official.cc/spider-man-brand-new-day-2026
   node lk21P2p.mjs spider-man-brand-new-day-2026 info
   node lk21P2p.mjs spider-man-brand-new-day-2026 streams
+  node lk21P2p.mjs doctor-x-age-white-mafia-2026 episodes
+  node lk21P2p.mjs doctor-x-age-white-mafia-2026 --ep 3 streams
   node lk21P2p.mjs home
   node lk21P2p.mjs section latest-korea 2
   node lk21P2p.mjs search "spider man"
@@ -54,10 +60,9 @@ const WM = 'VenzioLûx — Vloûte Cataclysm'
 
 //ffmpeg opsional: dipakai buat remux (Gak ada = fallback .ts)
 const FFMPEG = (() => {
-  const bin = process.env.LK21_FFMPEG || 'ffmpeg'
   try {
-    execFileSync(bin, ['-version'], { stdio: 'ignore' })
-    return bin
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' })
+    return 'ffmpeg'
   } catch {
     return null
   }
@@ -75,7 +80,7 @@ const HDR = {
   'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8',
 }
 
-let BASE = process.env.LK21_BASE || ''
+let BASE = ''
 
 // parse CLI --base flag
 const argvRaw = process.argv.slice(2)
@@ -87,6 +92,15 @@ if (baseIdx !== -1 && argvRaw[baseIdx + 1]) {
   argvRaw.splice(baseIdx, 2)
 }
 if (!BASE) BASE = BASE_CANDIDATES[0]
+
+// parse CLI --ep flag (pilih episode series)
+let EP_FLAG = null
+const epIdx = argvRaw.indexOf('--ep')
+if (epIdx !== -1 && argvRaw[epIdx + 1]) {
+  const n = Math.floor(Number(argvRaw[epIdx + 1]))
+  if (Number.isFinite(n) && n >= 1) EP_FLAG = n
+  argvRaw.splice(epIdx, 2)
+}
 
 class ServiceDown extends Error {
   constructor(m) { super(m); this.down = true }
@@ -114,6 +128,11 @@ const blocked = (where, status) => {
   if (status === 404) {
     const e = new Error(`${where} 404 not found`)
     e.kind = 'not_found'
+    throw e
+  }
+  if (status === 400) {
+    const e = new Error(`${where} 400 bad request cek parameter`)
+    e.kind = 'bad_input'
     throw e
   }
   if (status >= 500) {
@@ -150,17 +169,17 @@ const hit = async (url, opt = {}) => {
 }
 
 const resolveBase = async () => {
-  if (process.env.LK21_BASE || BASE_FLAG) return BASE
+  if (BASE_FLAG) return BASE
   for (const candidate of BASE_CANDIDATES) {
     try {
-      const r = await hit(candidate, { headers: HDR })
-      if (r.r.status === 200 && !cfPage(r.body)) {
+      const r = await hit(candidate, { headers: HDR, retries: 0, timeout: 15000 })
+      if (r.r.status < 500 && !cfPage(r.body)) {
         BASE = candidate
         return candidate
       }
     } catch {}
   }
-  return BASE_CANDIDATES[0]
+  return (BASE = BASE_CANDIDATES[0])
 }
 
 //bersihkan teks dari HTML
@@ -334,55 +353,52 @@ const parseCards = (html) => {
   return out
 }
 
-const MIRROR = 'https://tv.nontonfilm.red'
+const SEARCH_API = 'https://gudangvape.com'
+const THUMB_BASE = 'https://poster.assetsy.de/wp-content/uploads/'
 async function search(q) {
   const T0 = performance.now()
-  const src = `${MIRROR}/?s=${encodeURIComponent(q)}`
-  const r = await hit(src, { headers: HDR })
+  const src = `${SEARCH_API}/search.php?s=${encodeURIComponent(q)}&page=1`
+  const r = await hit(src, {
+    headers: { ...HDR, accept: 'application/json,*/*', 'x-requested-with': 'XMLHttpRequest', referer: `${BASE}/` },
+  })
   if (r.r.status !== 200) blocked(src, r.r.status)
-  if (cfPage(r.body)) throw new Blocked(`${src} 403 forbidden cloudflare challenge`)
+
+  let payload = null
+  try { payload = JSON.parse(r.body) } catch {
+    const e = new Error(`${src} bad json search parser changed`)
+    e.kind = 'parse_changed'
+    throw e
+  }
+  if (payload.error) {
+    const e = new Error(`search "${q}" ${payload.error}`)
+    e.kind = 'not_found'
+    throw e
+  }
 
   const results = []
   const seen = new Set()
-  for (const m of r.body.matchAll(/<article[\s\S]*?<\/article>/gi)) {
-    const el = m[0]
-    const uTag = first(el, /<a[^>]*itemprop="url"[^>]*>/i)
-    let url = uTag ? attrVal(uTag, 'href') : ''
-    if (!url) continue
-    if (/nontonfilm\.red/i.test(url)) url = url.replace(/^https?:\/\/[^/]+/i, BASE).replace(/\/+$/, '')
-    if (seen.has(url)) continue
-
-    const title = strip(first(el, /<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i))
-      || strip(first(el, /title="Permalink to:\s*([^"]+)"/i))
-    if (!title) continue
-    seen.add(url)
-
-    let thumb = ''
-    const imgTag = first(el, /<img[^>]*wp-post-image[^>]*>/i) || first(el, /<img[^>]+>/i)
-    if (imgTag) {
-      thumb = attrVal(imgTag, 'data-src') || attrVal(imgTag, 'src') || ''
-      thumb = thumb.replace(/-\d+x\d+(\.(?:jpe?g|png|webp))$/i, '$1')
-    }
-    const rating = strip(first(el, /class="gmr-rating-item"[^>]*>([\s\S]*?)<\/div>/i))
-    const durasi = strip(first(el, /class="gmr-duration-item"[^>]*>([\s\S]*?)<\/div>/i))
-    const quality = strip(first(el, /class="gmr-quality-item[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i))
-    const genreSeg = first(el, /<div class="gmr-movie-on"[^>]*>([\s\S]*?)<\/div>/i)
-    const kategori = each(genreSeg, /<a[^>]*>([\s\S]*?)<\/a>/gi).map(strip).filter(Boolean).join(', ')
-    const year = first(title, /\b((?:19|20)\d{2})\b/)
+  for (const it of Array.isArray(payload.data) ? payload.data : []) {
+    const slug = String(it.slug || '').trim()
+    if (!slug || seen.has(slug)) continue
+    seen.add(slug)
+    const poster = String(it.poster || '').trim()
     results.push(compact({
-      title,
-      url,
-      thumbnail: thumb || null,
-      kategori: kategori || null,
-      rating: rating || null,
-      durasi: durasi || null,
-      quality: quality || null,
-      year: year || null,
+      title: strip(it.title) || slug,
+      url: `${BASE}/${slug}`,
+      slug,
+      thumbnail: poster ? (/^https?:/i.test(poster) ? poster : THUMB_BASE + poster.replace(/^\/+/, '')) : null,
+      rating: it.rating != null && Number(it.rating) > 0 ? String(it.rating) : null,
+      durasi: strip(it.runtime) || null,
+      quality: strip(it.quality) || null,
+      year: it.year ? String(it.year) : null,
+      tipe: strip(it.type) || null,
+      episode: it.episode ? String(it.episode) : null,
+      season: it.season ? String(it.season) : null,
     }))
   }
 
   if (!results.length) {
-    const e = new Error(`search "${q}" no results keyword gak ketemu atau parser changed`)
+    const e = new Error(`search "${q}" no results keyword gak ketemu`)
     e.kind = 'not_found'
     throw e
   }
@@ -391,7 +407,8 @@ async function search(q) {
     mode: 'search',
     ok: true,
     base: BASE,
-    via: 'tv.nontonfilm.red',
+    via: new URL(SEARCH_API).host,
+    totalPages: Number(payload.totalPages) || 1,
     results,
     count: results.length,
     engine: 'lk21.direct',
@@ -408,6 +425,10 @@ async function home(arg = 1) {
   let r = await hit(src, { headers: HDR })
   if (pg > 1 && (r.r.status !== 200 || !r.body.trim())) {
     src = `${BASE}/release/page/${pg}`
+    r = await hit(src, { headers: HDR })
+  }
+  if (pg === 1 && r.r.status !== 200) {
+    src = `${BASE}/release`
     r = await hit(src, { headers: HDR })
   }
   if (r.r.status !== 200) blocked(src, r.r.status)
@@ -481,10 +502,26 @@ async function section(type, page = 1) {
 
 async function detail(link) {
   const T0 = performance.now()
-  const r = await hit(link, { headers: HDR })
+  let r = await hit(link, { headers: HDR })
   if (r.r.status !== 200) blocked(link, r.r.status)
+  const openNow = first(r.body, /<a[^>]*id="openNow"[^>]*href="([^"]+)"/i)
+    || first(r.body, /<a[^>]*href="([^"]+)"[^>]*id="openNow"/i)
+  const dataPage = first(r.body, /<body[^>]*data-page="([^"]+)"/i)
+  if (openNow) {
+    r = await hit(openNow.replace(/&amp;/g, '&'), { headers: HDR })
+  } else if (dataPage && !/nontondrama/i.test(r.url)) {
+    r = await hit(`https://dramamu.lk21.de/${dataPage}`, { headers: HDR })
+  }
   const html = r.body
   if (cfPage(html)) throw new Blocked(`${link} 403 forbidden cloudflare challenge`)
+  // soft-404: slug ga ada -> situs redirect ke halaman depan (path "/")
+  let finalPath = ''
+  try { finalPath = new URL(r.url).pathname } catch {}
+  if (finalPath === '/' || finalPath === '') {
+    const e = new Error(`${link} 404 not found slug gak ada`)
+    e.kind = 'not_found'
+    throw e
+  }
   const M = metaMap(html)
   const LD = jsonLdMovie(html)
   const WHD = jsonById(html, 'watch-history-data')
@@ -568,7 +605,7 @@ async function detail(link) {
       ? Number(LD.aggregateRating.bestRating) : NaN
     return Number.isFinite(v) ? v : null
   })()
-  const durationMinutes = (() => {
+  let durationMinutes = (() => {
     const d = String(duration || '').trim()
     const h = d.match(/^(\d+)\s*h(?:\s*(\d+)\s*m)?/i)
     if (h) return Number(h[1]) * 60 + (h[2] ? Number(h[2]) : 0)
@@ -640,6 +677,24 @@ async function detail(link) {
     const p = await resolveEmbed(s.url)
     if (p) s.player = p
   }))
+  let durationSec = null
+  const p2pUrl = (streams.find((s) => /videonode\.de\/iframe3\/p2p\//i.test(s.url)) || {}).url
+  if (p2pUrl) {
+    try {
+      const pc = await resolvePlaycdn(p2pUrl)
+      if (pc && pc.fileUrl) {
+        const man = await hit(pc.fileUrl, { headers: { ...HDR, accept: 'application/vnd.apple.mpegurl,*/*', referer: pc.player } })
+        if (man.r.status === 200) {
+          const secs = each(man.body, /#EXTINF:([\d.]+)/g).reduce((a, v) => a + Number(v), 0)
+          if (secs > 0) {
+            durationSec = Math.round(secs)
+            durationMinutes = Math.round(durationSec / 60)
+          }
+        }
+      }
+    } catch {}
+  }
+  const durationReal = durationSec ? `${Math.floor(durationSec / 3600)}h ${Math.round((durationSec % 3600) / 60)}m` : null
   return compact({
     input: link,
     mode: 'info',
@@ -652,8 +707,10 @@ async function detail(link) {
     siteName,
     contentType,
     thumbnail: cover,
-    duration: duration || null,
+    duration: durationReal || duration || null,
+    durationSeconds: durationSec,
     durationMinutes,
+    durationSite: duration || null,
     rating: rating || null,
     ratingScale,
     kategori: kategoriArr.join(', ') || null,
@@ -719,7 +776,11 @@ const downloadHls = async (segs, hosts, out) => {
           break
         } catch (e) { last = e.message }
       }
-      if (!buf) throw new Error(`segment ${s.name} failed ${last || 'all hosts rejected'}`)
+      if (!buf) {
+        const e = new Error(`segment ${s.name} failed ${last || 'all hosts rejected'}`)
+        e.kind = 'network'
+        throw e
+      }
       fs.writeFileSync(path.join(tmp, `${s.name}.part`), buf)
     }
   }
@@ -821,6 +882,112 @@ const remuxMp4 = (from, to) => {
   return run(['-bsf:a', 'aac_adtstoasc']) || run([])
 }
 
+const fetchSeries = async (link) => {
+  let r = await hit(link, { headers: HDR })
+  if (r.r.status === 404) {
+    const e = new Error(`${link} 404 not found`)
+    e.kind = 'not_found'
+    throw e
+  }
+  const openNow = first(r.body, /id="openNow"[^>]*href="([^"]+)"/i)
+  if (openNow) {
+    r = await hit(openNow.replace(/&amp;/g, '&'), { headers: HDR })
+  } else {
+    const dataPage = first(r.body, /<body[^>]*data-page="([^"]+)"/i)
+    if (dataPage && !/season-\d+-episode-\d+/i.test(r.url)) {
+      const tgt = `https://dramamu.lk21.de/${dataPage}`
+      r = await hit(tgt, { headers: HDR })
+    }
+  }
+  const episodes = parseEpisodes(r.body, r.url)
+  return { r, url: r.url, episodes }
+}
+
+const parseEpisodes = (html, baseUrl = BASE) => {
+  const s = String(html)
+  const origin = (() => { try { return new URL(baseUrl).origin } catch { return BASE } })()
+  const out = []
+  const seen = new Set()
+  const pushEp = (ep, season, label, slug) => {
+    if (!ep || seen.has(ep)) return
+    seen.add(ep)
+    out.push(compact({ ep, season: season || null, label: label || `Episode ${ep}`, url: `${origin}/${slug.replace(/^\//, '')}` }))
+  }
+  const raw = first(s, /<script[^>]*id="season-data"[^>]*>([\s\S]*?)<\/script>/i)
+  if (raw) {
+    try {
+      const data = JSON.parse(raw.trim())
+      for (const [season, arr] of Object.entries(data)) {
+        for (const it of Array.isArray(arr) ? arr : []) {
+          pushEp(Number(it.episode_no) || Number(it.ep), Number(it.s || it.season || season), strip(it.title), String(it.slug || ''))
+        }
+      }
+    } catch {}
+  }
+  if (!out.length) {
+    for (const m of s.matchAll(/href="([^"]*season-\d+-episode-(\d+)[^"]*)"/gi)) {
+      const slug = m[1].replace(/^https?:\/\/[^/]+/i, '').replace(/^\//, '')
+      const season = Number((slug.match(/season-(\d+)-episode/i) || [])[1]) || null
+      pushEp(Number(m[2]), season, `Episode ${m[2]}`, slug)
+    }
+  }
+  return out.sort((a, b) => (a.season || 1) - (b.season || 1) || a.ep - b.ep)
+}
+
+async function episodes(link) {
+  const T0 = performance.now()
+  const url = toUrl(link)
+  if (!url) {
+    const e = new Error(`invalid input expected url or slug`)
+    e.kind = 'bad_input'
+    throw e
+  }
+  let { r, url: src, episodes: list } = await fetchSeries(url)
+  if (!list.length) {
+    const all = first(r.body, /href="([^"]*\/tv\/[^"?#]+\/)"/i)
+    if (all && all !== src) {
+      const abs = /^https?:/i.test(all) ? all : `${new URL(src).origin}${all}`
+      const r2 = await fetchSeries(abs)
+      r = r2.r
+      src = r2.url
+      list = r2.episodes
+    }
+  }
+  if (!list.length) {
+    const e = new Error(`${src} no episode list found not a series page or parser changed`)
+    e.kind = 'not_found'
+    throw e
+  }
+  return compact({
+    input: link,
+    mode: 'episodes',
+    ok: true,
+    base: BASE,
+    via: new URL(src).host,
+    title: strip(first(r.body, /<title>([^<]*)<\/title>/i)),
+    episodes: list,
+    count: list.length,
+    latest: list[list.length - 1].ep,
+    engine: 'lk21.direct',
+    watermark: WM,
+    source: `LK21 (${BASE})`,
+    elapsedMs: Math.round(performance.now() - T0),
+  })
+}
+
+async function resolveEpisode(link, n) {
+  const url = toUrl(link)
+  const { episodes: list } = await fetchSeries(url)
+  const found = list.find((x) => x.ep === n)
+  if (!found) {
+    const e = new Error(`${link} episode ${n} not found available ${list.map((x) => x.ep).join(' ')}`)
+    e.kind = 'not_found'
+    e.detail = `available: ${list.map((x) => x.ep).join(',') || 'none'}`
+    throw e
+  }
+  return found.url
+}
+
 async function download(link, outArg) {
   const T0 = performance.now()
   const r = await detail(link)
@@ -918,26 +1085,40 @@ async function download(link, outArg) {
 }
 
 const HINT = {
-  bad_input: 'invalid usage expected home | section <type> [page] | search "<kw>" | <url> [info|streams|download]',
-  not_found: 'not found check slug url keyword may be removed or no results',
-  ip_blocked: 'ip blocked or rate limited wait retry or switch --base mirror',
+  bad_input: 'invalid usage expected home | section <type> [page] | search "<kw>" | <url> [info|streams]',
+  not_found: 'not found check slug url keyword may be removed or parser changed',
+  ip_blocked: 'ip blocked or rate limited retry later or switch base mirror',
   service_down: 'origin down 52x target unreachable retry later',
   network: 'network error check connection dns reset',
-  parse_changed: 'parser changed site structure updated report for fix',
+  parse_changed: 'parser changed site structure updated',
   redirect: 'redirect detected open redirect field',
-  unknown: 'unknown error check message parser may have changed',
+  unknown: 'unknown error check message',
+}
+
+const kindOf = (e) => {
+  if (e && e.kind && HINT[e.kind]) return e.kind
+  const m = String((e && (e.message + ' ' + (e.detail || ''))) || '').toLowerCase()
+  if (/\b(403|429|forbidden|rate limit|too many requests|captcha|blocked)\b/.test(m)) return 'ip_blocked'
+  if (/\b(400|bad request|invalid usage|unknown command)\b/.test(m)) return 'bad_input'
+  if (/\b(404|not found|no results|tidak ditemukan)\b/.test(m)) return 'not_found'
+  if (/\b(52[0-9]|503|service unavailable|bad gateway|gateway timeout)\b/.test(m)) return 'service_down'
+  if (/\b(redirect|moved permanently|moved temporarily|301|302|307|308)\b/.test(m)) return 'redirect'
+  if (/\b(ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network|fetch failed|timeout)\b/.test(m)) return 'network'
+  if (/\b(json|parse|unexpected token|structure|selector)\b/.test(m)) return 'parse_changed'
+  return 'unknown'
 }
 
 const errOut = (input, mode, e, T0) => {
-  const kind = e.down ? 'service_down' : e.blocked ? 'ip_blocked' : (e.kind || 'unknown')
+  const kind = e.down ? 'service_down' : e.blocked ? 'ip_blocked' : kindOf(e)
   return compact({
     input: input || null,
     mode,
+    status: 'error',
     ok: false,
     base: BASE,
     kind,
-    error: e.message,
-    hint: HINT[kind] || null,
+    error: (e && e.message) || HINT[kind] || HINT.unknown,
+    ...(e && e.detail ? { detail: String(e.detail).slice(0, 200) } : {}),
     engine: 'lk21.direct',
     watermark: WM,
     source: `LK21 (${BASE})`,
@@ -963,7 +1144,7 @@ async function main() {
   let mode = argv[0]
   let input = argv.join(' ')
   try {
-    if (!process.env.LK21_BASE && !BASE_FLAG) {
+    if (!BASE_FLAG) {
       await resolveBase()
     }
 
@@ -990,26 +1171,41 @@ async function main() {
       console.log(JSON.stringify(await search(q), null, 2))
       return
     }
+    if (argv[0] === 'episodes') {
+      if (!argv[1]) {
+        const e = new Error(`episodes missing url expected url or slug`)
+        e.kind = 'bad_input'
+        throw e
+      }
+      console.log(JSON.stringify(await episodes(argv[1]), null, 2))
+      return
+    }
 
     mode = (argv[1] || 'info').toLowerCase()
-    if (!['info', 'streams', 'download'].includes(mode)) {
-      const e = new Error(`invalid mode ${mode} expected info, streams or download`)
+    if (!['info', 'streams', 'download', 'episodes'].includes(mode)) {
+      const e = new Error(`invalid mode ${mode} expected info, streams, download or episodes`)
       e.kind = 'bad_input'
       throw e
     }
-    const link = toUrl(argv[0])
+    let link = toUrl(argv[0])
     if (!link) {
       const e = new Error(`invalid input expected url or slug`)
       e.kind = 'bad_input'
       throw e
     }
     input = link
+    if (mode === 'episodes') {
+      console.log(JSON.stringify(await episodes(argv[0]), null, 2))
+      return
+    }
+    if (EP_FLAG) link = await resolveEpisode(link, EP_FLAG)
     if (mode === 'download') {
       const outArg = argv.slice(2).find((x) => /[./]/.test(x))
       console.log(JSON.stringify(await download(link, outArg), null, 2))
       return
     }
     const r = await detail(link)
+    if (r.ok === false) { console.log(JSON.stringify(r, null, 2)); return }
     if (mode === 'streams') {
       console.log(JSON.stringify(compact({
         input: r.input,
