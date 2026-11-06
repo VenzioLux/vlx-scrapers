@@ -4,10 +4,11 @@ Base    : https://youtube.com
 Author  : VenzioLûx
 Saluran : https://whatsapp.com/channel/0029VarG5MaGE56eduecoC0N
 Features:
-- Innertube no-PoToken (ANDROID_VR / IOS / VISIONOS fallback)
+- Innertube multi-client (ANDROID_VR / IOS / VISIONOS) + fallback web SSR
 - Direct CDN stream: audio m4a/opus, video adaptive sampai 4K
-- Range paralel anti-throttle (3MB < 1 detik)
+- Range paralel anti-throttle + retry & rotasi host CDN kalau node lambat/403
 - Auto-mux audio buat video >360p (ffmpeg -c copy)
+- Video yang di-gate PoToken (bot-check) ditolak dengan error `ip_blocked`, bukan hasil kosong
 - Playlist: daftar lagu + judul, channel, views, durasi, thumbnail, paging otomatis
 - Community post: isi post (teks + gambar) dari halaman channel
 - Zero dependency, Node >= 18
@@ -26,11 +27,58 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+const KIND_MSG = {
+    bad_input: 'invalid usage expected home | section <type> [page] | search "<kw>" | <url> [info|streams]',
+    not_found: 'not found check slug url keyword may be removed or parser changed',
+    ip_blocked: 'ip blocked or rate limited retry later or switch base mirror',
+    service_down: 'origin down 52x target unreachable retry later',
+    network: 'network error check connection dns reset',
+    parse_changed: 'parser changed site structure updated',
+    redirect: 'redirect detected open redirect field',
+    unknown: 'unknown error check message',
+}
+
+const mkFail = (kind, message, detail) => {
+    const e = new Error(message || KIND_MSG[kind] || KIND_MSG.unknown)
+    e.kind = kind
+    if (detail) e.detail = String(detail).slice(0, 200)
+    return e
+}
+
+const kindOf = (e) => {
+    if (e && e.kind && KIND_MSG[e.kind]) return e.kind
+    const m = String((e && (e.message + ' ' + (e.detail || ''))) || '').toLowerCase()
+    if (/\b(403|429|forbidden|rate limit|too many requests|captcha|blocked)\b/.test(m)) return 'ip_blocked'
+    if (/\b(400|bad request|invalid usage|unknown command)\b/.test(m)) return 'bad_input'
+    if (/\b(404|not found|no results|tidak ditemukan)\b/.test(m)) return 'not_found'
+    if (/\b(52[0-9]|503|service unavailable|bad gateway|gateway timeout)\b/.test(m)) return 'service_down'
+    if (/\b(redirect|moved permanently|moved temporarily|301|302|307|308)\b/.test(m)) return 'redirect'
+    if (/\b(ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network|fetch failed|timeout)\b/.test(m)) return 'network'
+    if (/\b(json|parse|unexpected token|structure|selector)\b/.test(m)) return 'parse_changed'
+    return 'unknown'
+}
+
+const failOut = (e, extra = {}) => {
+    const kind = kindOf(e)
+    console.log(JSON.stringify({
+        status: 'error',
+        kind,
+        error: (e && e.message) || KIND_MSG[kind] || KIND_MSG.unknown,
+        ...(e && e.detail ? { detail: String(e.detail).slice(0, 200) } : {}),
+        watermark: WM,
+        source: SRC,
+        ...extra,
+    }, null, 2))
+    process.exit(1)
+}
+
+
 const YT_EP = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
 const BROWSE_EP = 'https://www.youtube.com/youtubei/v1/browse?prettyPrint=false'
 const UA_WEB = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+const WM = 'VenzioLûx — Vloûte Cataclysm'
+const SRC = 'youtube.com (innertube)'
 
-// browse (playlist & community post) cuma jalan di client WEB
 const _BROWSE_CLIENT = { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' }
 const _BROWSE_HDR = {
     'content-type': 'application/json',
@@ -95,7 +143,7 @@ export function resolveVideoId(raw) {
     return null
 }
 
-// innertube browse — dipakai playlist & community post
+// innertube browse
 async function browse(body, { timeout = 25000 } = {}) {
     const r = await fetch(BROWSE_EP, {
         method: 'POST',
@@ -104,8 +152,8 @@ async function browse(body, { timeout = 25000 } = {}) {
         signal: AbortSignal.timeout(timeout),
     })
     const j = await r.json().catch(() => null)
-    if (!j) throw new Error(`browse HTTP ${r.status} — respons bukan JSON (kemungkinan diblokir).`)
-    if (j.error) throw new Error(`browse error ${j.error.code}: ${j.error.message || ''}`)
+    if (!j) throw mkFail('parse_changed', `browse http ${r.status} response not json`)
+    if (j.error) throw mkFail('unknown', `browse error ${j.error.code}`)
     return j
 }
 
@@ -117,7 +165,6 @@ export function resolveListId(raw) {
     return m ? m[1] : null
 }
 
-// YouTube sudah pindah ke lockupViewModel untuk playlist; bentuk lama dipakai sebagai jaring pengaman
 function _pickItems(j) {
     const c = j?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents
     if (Array.isArray(c)) return c
@@ -178,7 +225,7 @@ function _normOldPlaylistVideo(r) {
 
 export async function playlist(input, { limit = 100, timeout = 25000 } = {}) {
     const listId = resolveListId(input)
-    if (!listId) throw new Error('Playlist ID tidak terbaca. Contoh: https://www.youtube.com/playlist?list=PLxxxxxxxx atau PLxxxxxxxx langsung.')
+    if (!listId) throw mkFail('bad_input', 'playlist id not found')
     const j = await browse({ browseId: 'VL' + listId }, { timeout })
 
     const side = j?.sidebar?.playlistSidebarRenderer?.items?.[0]?.playlistSidebarPrimaryInfoRenderer
@@ -201,9 +248,10 @@ export async function playlist(input, { limit = 100, timeout = 25000 } = {}) {
         if (!tok || out.length >= limit) break
         page = await browse({ continuation: tok }, { timeout })
     }
-    if (!out.length) throw new Error('Playlist ini kosong, private, atau ID-nya salah.')
+    if (!out.length) throw mkFail('not_found', 'playlist empty private or wrong id')
     return {
         status: 'success',
+        watermark: WM, source: SRC,
         listId, title, totalTracks: total || out.length,
         returned: out.length,
         hasMore: !!(total && out.length < total),
@@ -212,7 +260,6 @@ export async function playlist(input, { limit = 100, timeout = 25000 } = {}) {
     }
 }
 
-// community post: diambil dari HTML SSR halaman /@channel/community, tanpa login
 export function resolvePostId(raw) {
     const s = String(raw || '').trim()
     if (!s) return null
@@ -256,18 +303,18 @@ function _normPost(p) {
 export async function post(input, { limit = 10, timeout = 30000 } = {}) {
     const ch = resolveChannel(input)
     const wantId = resolvePostId(input)
-    // tanpa channel, cari tahu lewat ID post -> halamannya biasanya kena 404, jadi wajib ada channel
-    if (!ch) throw new Error('Channel tidak terbaca. Pakai: node ytVr-lite.mjs https://www.youtube.com/@RickAstleyYT/community post')
+    
+    if (!ch) throw mkFail('bad_input', 'channel not found')
 
     const url = `https://www.youtube.com/@${ch}/community`
     const r = await fetch(url, { headers: { 'user-agent': UA_WEB, 'accept-language': 'en-US,en;q=0.9' }, signal: AbortSignal.timeout(timeout) })
     const html = await r.text()
-    if (r.status === 404) throw new Error(`Halaman community untuk @${ch} tidak ada (404).`)
+    if (r.status === 404) throw mkFail('not_found', `community page for @${ch} not found`)
     const m = html.match(/var ytInitialData\s*=\s*({.+?});<\/script>/)
-    if (!m) throw new Error('ytInitialData tidak ketemu di halaman community — YouTube mungkin ganti layout, atau channel-nya private.')
+    if (!m) throw mkFail('parse_changed', 'ytInitialData not found in community page')
 
     let data
-    try { data = JSON.parse(m[1]) } catch { throw new Error('ytInitialData gagal di-parse (kemungkinan ada karakter aneh di teks post).') }
+    try { data = JSON.parse(m[1]) } catch { throw mkFail('parse_changed', 'ytInitialData parse failed') }
 
     const raw = _collectPosts(data)
     const seen = new Set()
@@ -277,12 +324,13 @@ export async function post(input, { limit = 10, timeout = 30000 } = {}) {
         seen.add(p.postId)
         posts.push(_normPost(p))
     }
-    if (!posts.length) throw new Error(`Tidak ada post publik di @${ch}. Bisa channel-nya memang tidak pernah posting, atau semua post-nya private.`)
+    if (!posts.length) throw mkFail('not_found', `no public posts on @${ch}`)
 
     const picked = wantId ? posts.filter(p => p.postId === wantId) : posts
     const out = (picked.length ? picked : posts).slice(0, Math.max(1, limit))
     return {
         status: 'success',
+        watermark: WM, source: SRC,
         channel: `@${ch}`,
         url,
         found: posts.length,
@@ -332,7 +380,7 @@ async function webInfo(videoId) {
         signal: AbortSignal.timeout(20000),
     })).text()
     const m = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/)
-    if (!m) throw new Error('web SSR: player response gak ketemu')
+    if (!m) throw mkFail('parse_changed', 'player response not found in web ssr')
     return JSON.parse(m[1])
 }
 
@@ -347,14 +395,19 @@ const _TTL = 5 * 60_000
 
 export async function extract(input, { fresh = false } = {}) {
     const videoId = resolveVideoId(input)
-    if (!videoId) throw new Error('gak bisa resolve video ID')
+    if (!videoId) throw mkFail('bad_input', 'cannot resolve video id')
     if (!fresh) {
         const c = _cache.get(videoId)
         if (c && Date.now() - c.at < _TTL) return c.data
     }
-    let p, engine
+    
+    let p, engine, reason = ''
     try { p = await player(videoId); engine = p.__client }
-    catch { p = await webInfo(videoId); engine = 'web_ssr' }
+    catch (e) {
+        reason = e.message
+        try { p = await webInfo(videoId); engine = 'web_ssr' }
+        catch (e2) { throw mkFail(kindOf(e), e.message || 'all engines failed', e2.message) }
+    }
 
     const d = p?.videoDetails || {}
     const audio = [], video = []
@@ -369,6 +422,8 @@ export async function extract(input, { fresh = false } = {}) {
     video.sort((a, b) => (b.height || 0) - (a.height || 0))
     const thumbs = d.thumbnail?.thumbnails || []
     const out = {
+        status: 'success',
+        watermark: WM, source: SRC,
         videoId, engine,
         title: d.title || '', author: d.author || '',
         durationSeconds: Number(d.lengthSeconds || 0),
@@ -379,7 +434,16 @@ export async function extract(input, { fresh = false } = {}) {
         audio, video,
         totalStreams: audio.length + video.length,
     }
-    if (out.totalStreams) { _cache.set(videoId, { at: Date.now(), data: out }); if (_cache.size > 120) _cache.delete(_cache.keys().next().value) }
+    if (!out.totalStreams) {
+        const why = String(p?.playabilityStatus?.reason || '').trim() || reason || 'no playable stream'
+        const gated = /sign in|not a bot|login|bot/i.test(why)
+        throw mkFail(
+            gated ? 'ip_blocked' : /unavailable|private|removed|not available/i.test(why) ? 'not_found' : 'not_found',
+            gated ? `youtube requires sign-in bot check po_token gated video` : `${why.toLowerCase()} (${engine})`,
+            why,
+        )
+    }
+    _cache.set(videoId, { at: Date.now(), data: out }); if (_cache.size > 120) _cache.delete(_cache.keys().next().value)
     return out
 }
 
@@ -400,7 +464,7 @@ async function streamUrl(input, itag) {
 }
 
 // downloader budget-aware
-const _BIG = 4 * 1048576, _SMALL = 131072, _BUDGET = 1048576
+const _BIG = 4 * 1048576, _SMALL = 131072, _BUDGET = 1048576, _PROBE = 1048576
 export async function downloadStream(url, { totalSize = 0, refresh = null, timeout = 120000 } = {}) {
     const deadline = Date.now() + Math.max(20000, timeout)
     const left = () => deadline - Date.now()
@@ -413,26 +477,35 @@ export async function downloadStream(url, { totalSize = 0, refresh = null, timeo
         } catch (e) { return { status: 0, buf: null, total: 0, err: e.message } }
     }
     const renew = async (cur) => {
-        if (!refresh) throw new Error('budget habis & refresh gak tersedia')
+        if (!refresh) throw mkFail('network', 'budget exhausted refresh unavailable')
         const u = await refresh()
-        if (!u) throw new Error('refresh URL gagal')
+        if (!u) throw mkFail('network', 'refresh url failed')
         return u
     }
 
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms))
     let cur = url, total = Number(totalSize) || 0, pos = 0
     const parts = []
     while (true) {
         if (total && pos >= total) break
-        const big = await g(cur, pos, pos + _BIG - 1, 25000)
-        if (left() <= 0) throw new Error('deadline')
+        let big = null
+        for (let t = 0; t < 4; t++) {
+            if (left() <= 3000) break
+            big = await g(cur, pos, pos + _PROBE - 1, 10000)
+            if (big.status === 200 || big.status === 206) break
+            if (big.status === 403 && (!refresh || t >= 2)) break
+            if (refresh) { try { cur = await renew(cur) } catch { } }
+            await sleep(400 * (t + 1))
+        }
+        if (!big) throw mkFail('network', 'deadline exceeded')
+        if (left() <= 0) throw mkFail('network', 'deadline exceeded')
 
         if (big.status === 403) {
-            // mode SMALL — jendela paralel 8×128KB, grind cap 30s, budget 1MB/URL
             const tGrind = Date.now()
             let served = 0
             while (!total || pos < total) {
                 if (left() <= 0 || Date.now() - tGrind > 30000)
-                    throw new Error('video ini bot-flagged: URL iOS dibatasi ~1MB/IP dan ada anti-throttle. Tanpa proxy, video seperti ini gak bisa diunduh utuh — coba video lain.')
+                    throw mkFail('ip_blocked', 'video bot-flagged ios url capped per ip')
                 const want = Math.min(8 * _SMALL, total ? total - pos : 8 * _SMALL)
                 const starts = Array.from({ length: Math.ceil(want / _SMALL) }, (_, i) => pos + i * _SMALL)
                 const results = new Array(starts.length)
@@ -457,8 +530,8 @@ export async function downloadStream(url, { totalSize = 0, refresh = null, timeo
             }
             continue
         }
-        if (big.status === 0) throw new Error('network ' + (big.err || '?'))
-        if (big.status !== 200 && big.status !== 206) throw new Error('http ' + big.status)
+        if (big.status === 0) throw mkFail('network', 'network ' + (big.err || '?'))
+        if (big.status !== 200 && big.status !== 206) throw mkFail('unknown', 'http ' + big.status)
         if (big.status === 200) { parts.push({ start: pos, buf: big.buf }); break }
         if (!total) total = big.total
         if (!total) { parts.push({ start: pos, buf: big.buf }); break }
@@ -477,10 +550,10 @@ export async function downloadStream(url, { totalSize = 0, refresh = null, timeo
                 for (let t = 0; t < 3; t++) {
                     const r = await g(cur, starts[my], end, 30000)
                     if ((r.status === 200 || r.status === 206) && r.buf?.length === end - starts[my] + 1) { results[my] = r.buf; break }
-                    if (r.status === 403 && refresh) { cur = await renew(cur); continue }
-                    await new Promise(res => setTimeout(res, 500))
+                    if (refresh) { try { cur = await renew(cur) } catch { } }
+                    await sleep(500)
                 }
-                if (!results[my]) throw new Error('chunk gagal @' + starts[my])
+                if (!results[my]) throw mkFail('network', 'chunk failed @' + starts[my])
             }
         }))
         for (let i = 0; i < starts.length; i++) parts.push({ start: starts[i], buf: results[i] })
@@ -488,14 +561,12 @@ export async function downloadStream(url, { totalSize = 0, refresh = null, timeo
     }
     parts.sort((a, b) => a.start - b.start)
     const out = Buffer.concat(parts.map(p => p.buf))
-    if (total && out.length !== total) throw new Error(`size mismatch ${out.length}/${total}`)
+    if (total && out.length !== total) throw mkFail('network', `size mismatch ${out.length}/${total}`)
     return out
 }
 
 const _dur = (s) => { s = Number(s || 0); const m = Math.floor(s / 60), d = Math.floor(s % 60); return `${m}:${String(d).padStart(2, '0')}` }
 
-// embed metadata (title/artist/source) ke file — ffmpeg -c copy, gak re-encode.
-// ffmpeg gak ada? skip aja, file tetep valid cuma tanpa tag.
 const _hasFF = (() => { try { return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0 } catch { return false } })()
 function embedMeta(buf, { title = '', artist = '', comment = '', ext = 'm4a' }) {
     if (!_hasFF || !buf?.length) return buf
@@ -515,8 +586,6 @@ function embedMeta(buf, { title = '', artist = '', comment = '', ext = 'm4a' }) 
     }
 }
 
-// "AUDIO_QUALITY_MEDIUM" + bitrate 130677 -> "131kbps (medium)" — enum mentah YouTube
-// gak enak dibaca, jadi diformat numerik; bitrate = sumber kebenaran utama.
 function _fmtAud(audioQuality, bitrate) {
     const kbps = bitrate ? Math.round(bitrate / 1000) + 'kbps' : ''
     const map = { AUDIO_QUALITY_LOW: 'low', AUDIO_QUALITY_MEDIUM: 'medium', AUDIO_QUALITY_HIGH: 'high' }
@@ -524,7 +593,6 @@ function _fmtAud(audioQuality, bitrate) {
     return kbps && q ? `${kbps} (${q})` : (kbps || q || 'unknown')
 }
 
-// height 720 + fps 30 -> "720p" ; 1080 + 60 -> "1080p60"
 function _fmtVid(height, fps) {
     if (!height) return ''
     return fps >= 50 ? `${height}p${fps}` : `${height}p`
@@ -533,7 +601,7 @@ function _fmtVid(height, fps) {
 export async function audioBuffer(input, { timeout = 120000, meta = true } = {}) {
     const ex = await extract(input)
     const pick = pickAudio(ex)
-    if (!pick?.url) throw new Error('stream audio gak tersedia')
+    if (!pick?.url) throw mkFail('not_found', 'audio stream not available')
     let buffer = await downloadStream(pick.url, { totalSize: pick.contentLength, refresh: () => streamUrl(input, pick.itag), timeout })
     const m4a = pick.container === 'audio/mp4'
     if (meta) buffer = embedMeta(buffer, { title: ex.title, artist: ex.author, comment: `https://youtu.be/${ex.videoId}`, ext: m4a ? 'm4a' : 'webm' })
@@ -579,7 +647,7 @@ function mux(vBuf, aBuf, meta = {}) {
 export async function videoBuffer(input, targetRes = 720, { timeout = 240000 } = {}) {
     const ex = await extract(input)
     const v = pickVideo(ex, targetRes)
-    if (!v?.url) throw new Error('stream video gak tersedia')
+    if (!v?.url) throw mkFail('not_found', 'video stream not available')
     const meta = { title: ex.title, artist: ex.author, comment: `https://youtu.be/${ex.videoId}` }
     if (v.hasAudio) {
         let buffer = await downloadStream(v.url, { totalSize: v.contentLength, refresh: () => streamUrl(input, v.itag), timeout: timeout / 2 })
@@ -604,7 +672,7 @@ export async function videoBuffer(input, targetRes = 720, { timeout = 240000 } =
         durationSeconds: ex.durationSeconds, viewCount: ex.viewCount, isLive: ex.isLive,
         thumbnail: ex.thumbnail, engine: ex.engine,
         height: v.height, ext: 'mp4', mimetype: 'video/mp4',
-        stream: { itag: v.itag, container: v.container, codec: v.codec, fps: v.fps, audioItag: a?.itag || null },
+        stream: { itag: v.itag, container: v.container, codec: v.codec, fps: v.fps, audioItag: a?.itag || 0 },
     }
 }
 
@@ -616,9 +684,9 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
         console.log('       node ytVr-lite.mjs <post-url> post')
         process.exit(1)
     }
-    // dump hasil (minus buffer) sebagai JSON lengkap — metadata, desc, stream, dll
     const _dump = (r, f, dt) => console.log(JSON.stringify({
         status: 'success',
+        watermark: WM, source: SRC,
         title: r.title, author: r.author,
         videoId: r.videoId, url: `https://youtu.be/${r.videoId}`,
         duration: r.duration, durationSeconds: r.durationSeconds,
@@ -639,7 +707,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             fs.writeFileSync(f, r.buffer)
             _dump(r, f, (Date.now() - t0) / 1000)
         } catch (e) {
-            console.error('GAGAL:', e.message)
+            failOut(e)
             process.exit(1)
         }
     } else if (mode === 'mp4') {
@@ -650,7 +718,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             fs.writeFileSync(f, r.buffer)
             _dump(r, f, (Date.now() - t0) / 1000)
         } catch (e) {
-            console.error('GAGAL:', e.message)
+            failOut(e)
             process.exit(1)
         }
     } else if (mode === 'pl') {
@@ -658,7 +726,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             const r = await playlist(target, { limit: Math.min(Number(opt) || 100, 500) })
             console.log(JSON.stringify(r, null, 2))
         } catch (e) {
-            console.error('GAGAL:', e.message)
+            failOut(e)
             process.exit(1)
         }
     } else if (mode === 'plmp3') {
@@ -682,23 +750,29 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
             }
             console.log(JSON.stringify({
                 status: 'success',
+                watermark: WM, source: SRC,
                 playlist: r.title, listId: r.listId, url: r.url,
                 requested: r.returned, downloaded: done.length, failed: failed.length,
                 dir, files: done, errors: failed,
                 timeSec: +((Date.now() - t0) / 1000).toFixed(2),
             }, null, 2))
         } catch (e) {
-            console.error('GAGAL:', e.message)
+            failOut(e)
             process.exit(1)
         }
     } else if (mode === 'post') {
         try {
             console.log(JSON.stringify(await post(target, { limit: Math.min(Number(opt) || 10, 50) }), null, 2))
         } catch (e) {
-            console.error('GAGAL:', e.message)
+            failOut(e)
             process.exit(1)
         }
     } else {
-        console.log(JSON.stringify(await extract(target), null, 2))
+        try {
+            console.log(JSON.stringify(await extract(target), null, 2))
+        } catch (e) {
+            failOut(e)
+            process.exit(1)
+        }
     }
 }
